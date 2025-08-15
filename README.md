@@ -9,3 +9,7 @@ Plan:
 - metadata https://services.eodc.eu/browser/#/v1/collections/GFM?.language=en
 
 
+## Expose
+[Project Report (PDF)](dynamic-flood-visualization\docs\expose.pdf)
+
+
