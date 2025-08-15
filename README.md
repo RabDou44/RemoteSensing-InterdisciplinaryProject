@@ -10,6 +10,6 @@ Plan:
 
 
 ## Expose
-[Project Report (PDF)](dynamic-flood-visualization\docs\expose.pdf)
+[Project Report (PDF)](dynamic-flood-visualization/docs/expose.pdf)
 
 
