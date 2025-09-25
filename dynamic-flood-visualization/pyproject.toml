@@ -1,0 +1,39 @@
+
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dynamic-flood-visualisation"
+version = "0.0.1"
+authors = [
+  { name="Adam Domoslawski", email="e12241331@student.tuwien.ac.at" },
+  { name="Jonas Schindler", email="e2329600@student.tuwien.ac.at"},
+  { name="Jakob Nicko", email="e11908534@student.tuwien.ac.at"}
+]
+
+description = "Package for visualisaing flood"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "odc-stac",
+    "pystac-client",
+    "hvplot",
+    "dask[distributed]", # Installs dask with distributed scheduling support
+    "pyproj",
+    "xarray", # hvplot.xarray requires xarray,
+    "ipykernel", # for jupyter notebook support
+    "geopandas",
+    "jupyter-bokeh"
+]
+
+license = {text= "MIT"}
+
+[project.urls]
+Homepage = "https://github.com/RabDou44/RemoteSensing-InterdisciplinaryProject"
+Issues = "https://github.com/RabDou44/RemoteSensing-InterdisciplinaryProject/issues"
