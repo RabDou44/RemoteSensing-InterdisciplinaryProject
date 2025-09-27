@@ -29,7 +29,9 @@ dependencies = [
     "xarray", # hvplot.xarray requires xarray,
     "ipykernel", # for jupyter notebook support
     "geopandas",
-    "jupyter-bokeh"
+    "jupyter-bokeh",
+    "matplotlib",
+    "bokeh"
 ]
 
 license = {text= "MIT"}

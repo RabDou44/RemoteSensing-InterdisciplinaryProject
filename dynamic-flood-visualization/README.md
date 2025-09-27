@@ -187,9 +187,6 @@ Currently, testing is done through the example notebook in `test/test.ipynb`.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Authors
-
-- Adam Domoslawski (e12241331@student.tuwien.ac.at)
 
 ## Acknowledgments
 
