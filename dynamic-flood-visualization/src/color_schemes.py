@@ -1,9 +1,15 @@
 """
-Custom linear color schemes for flood data visualization
+Custom linear color schemes for flood data visualization.
+
+Color Interpolation:
+Colors are distributed linearly across the value range. For example:
+['#08306b', '#08519c', '#4292c6'] will create color stops at [33%, 66%, 100%] of the data range.
+
+Usage:
+    from color_schemes import get_color_scheme
+    colors = get_color_scheme('blue_to_red')
+    plt.imshow(data, cmap=ListedColormap(colors))
 """
-
-
-
 COLOR_PALETTES = {
     # Blue-to-red gradient
     'blue_to_red': ['#08306b', '#08519c', '#4292c6', '#9ecae1', '#ffffcc', '#fed976', '#fd8d3c', '#e31a1c'],
@@ -22,6 +28,21 @@ COLOR_PALETTES = {
     
     # Single black color
     'solid_black': ['#000000'],
+
+    # Extended blue-to-red gradient
+    'blue_to_red_extended': [
+        '#08306b', '#08419c', '#0952cd', '#1963fe', '#2974ff', '#3985ff', '#4996ff', 
+        '#59a7ff', '#69b8ff', '#79c9ff', '#89daff', '#99ebff', '#a9fcff', '#b9ffff',
+        '#c9fff0', '#d9ffe1', '#e9ffd2', '#f9ffc3', '#fff9b4', '#fff3a5'
+    ],
+
+    # Light blue to strong blue gradient
+    'light_to_strong_blue': [
+        '#c8e6ff', '#bee1ff', '#b4ddff', '#aad8ff', '#a0d4ff', '#96cfff', '#8ccbff', '#82c6ff',
+        '#78c2ff', '#6ebdff', '#64b9ff', '#5ab4ff', '#50b0ff', '#46abff', '#3ca7ff', '#1e90ff',
+        '#1e90ff', '#1e90ff', '#1e90ff', '#1e90ff'
+    ],
+
 }
 
 def get_color_scheme(scheme_name):
