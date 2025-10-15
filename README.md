@@ -39,3 +39,15 @@ Class MapVisualiser:
 | effectiveness measure | Jonas | testing combinations of output measure of algorithms (ensemble, dlr, list, tuw)|
 | smoothing regions | Adam, Jakob | use some polygons  |
 
+
+Szenario: Flood extent is 0, likelihood is high => How to we color, that we are sure, there is no flood? 
+    - Combine Floodextent with likelihood and disregard high likelihood and no flood extent (Jakob has done some experiments)
+
+For only one point in time, there is valid data:
+    - Function with time range, which takes for every feature the first fully data/ or combines it from the snippeds
+
+TODOs:
+- Jakob does GEO with data from Jonas,
+- Jonas writes a function that checks for a timerpiod, that valid data is plotted
+- Adam continue on polygons
+
