@@ -11,3 +11,5 @@ Example
 | 2025-10-04 | Everyone        | Team Meeting             | 1.5   |
 | 2025-10-05 | Jonas | Implemented Color Schemes | 1.5 | 
 | 2025-10-05 | Jonas | Comapre different algorithms| 1.5 | 
+|2025-10-20| Jonas | Swath Mosaic | 4 |
+|2025-10-20| Jonas | Water Mask | 2 |
