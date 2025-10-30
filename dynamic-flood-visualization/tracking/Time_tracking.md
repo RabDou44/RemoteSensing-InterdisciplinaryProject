@@ -12,4 +12,6 @@ Example
 | 2025-10-05 | Jonas | Implemented Color Schemes | 1.5 | 
 | 2025-10-05 | Jonas | Comapre different algorithms| 1.5 | 
 |2025-10-20| Jonas | Swath Mosaic | 4 |
-|2025-10-20| Jonas | Water Mask | 2 |
+|2025-10-20| Jonas | Water Mask | 1.5 |
+|2025-10-30| Jonas | Test for 3D Visualization | 2.5 |
+
