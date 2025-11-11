@@ -198,3 +198,18 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - [GitHub Repository](https://github.com/RabDou44/RemoteSensing-InterdisciplinaryProject)
 - [Issues](https://github.com/RabDou44/RemoteSensing-InterdisciplinaryProject/issues)
+
+## What do we show the end user
+- One version with polygons for extend
+- one raw version (baseline)
+- one raw version with map (baseline)
+- Polygons with extend and likelihood?
+- Polygons with extend and likelihood with binning?
+Optional: Only satellite with water visible?
+
+Feedback Astrid, Thais: Around the 20-22th
+
+Jonas: Survey setup, google forms
+Jakob: Discusses with Adam the polygons 
+Adam: Polygons with binning and scales
+
