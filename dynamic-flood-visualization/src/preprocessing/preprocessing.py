@@ -40,12 +40,28 @@ class DataPreprocessor:
         else:
             available_bands = list(self.dc.data_vars)
             raise ValueError(f"Band '{band_name}' not found. Available bands are: {available_bands}")
+        
+    def limit_time_Of_band(self, band_name,timestamp):
+        
+        self.dc[band_name] = self.dc[band_name].isel(time=timestamp)
+        return self.dc[band_name]
+        
+        
 
     def clip_to_bbox(self, da, bbox):
+        """
+        Clips a DataArray to a bounding box.
+
+        Args:
+            da (xarray.DataArray): DataArray to clip.
+            bbox (tuple): Bounding box (minlon, maxlon, minlat, maxlat).
+
+        Returns:
+            xarray.DataArray: Clipped DataArray.
+        """
         minlon, maxlon, minlat, maxlat = bbox
         return da.rio.clip_box(minx=minlon, maxx=maxlon, miny=minlat, maxy=maxlat)
-
-
+    
     def reproject_band(self, band, bbox ):
         """
         Reproject bands to WGS84 (lon/lat)
@@ -65,5 +81,7 @@ class DataPreprocessor:
 
         da = self.clip_to_bbox(da, bbox)
 
-        return band.rio.reproject("EPSG:4326")
+        return da
 
+    
+    
