@@ -31,7 +31,16 @@ dependencies = [
     "geopandas",
     "jupyter-bokeh",
     "matplotlib",
-    "bokeh"
+    "bokeh",
+    "cartopy", 
+    "rioxarray",
+    "tqdm",
+    "numpy",
+    "pandas",
+    "scipy", 
+    "geoviews",
+    "seaborn",
+    "contextily"
 ]
 
 license = {text= "MIT"}

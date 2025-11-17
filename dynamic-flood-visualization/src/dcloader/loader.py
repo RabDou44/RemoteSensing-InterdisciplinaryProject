@@ -1,7 +1,9 @@
+import os
 import hvplot.xarray
 import pyproj
 from dask.distributed import wait
 from odc import stac as odc_stac
+import xarray as xr
 
 
 class DcLoader:
@@ -79,3 +81,25 @@ class DcLoader:
         else:
             available_bands = list(self.dc.data_vars)
             raise ValueError(f"Band '{band_name}' not found. Available bands are: {available_bands}")
+        
+    def save_to_netcdf(self, output_path):
+        """
+        Saves the current data cube to a NetCDF file.
+
+        Args:
+            output_path (str): The file path to save the NetCDF file.
+        """
+        if self.dc is None:
+            raise RuntimeError("Data has not been loaded yet. Call load_GFM_data() first.")
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        self.dc.to_netcdf(output_path, engine='netcdf4')
+
+    def load_from_netcdf(self, input_path):
+        """
+        Loads a data cube from a NetCDF file.
+
+        Args:
+            input_path (str): The file path of the NetCDF file to load.
+        """
+        self.dc = xr.open_dataset(input_path, chunks='auto')
