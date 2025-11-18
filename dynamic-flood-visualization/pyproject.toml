@@ -40,7 +40,8 @@ dependencies = [
     "scipy", 
     "geoviews",
     "seaborn",
-    "contextily"
+    "contextily",
+    "netCDF4"
 ]
 
 license = {text= "MIT"}
