@@ -22,9 +22,14 @@ import pickle
 import os
 import xarray as xr
 from datetime import datetime
+import re
+from color_schemes import COLOR_PALETTES
 
 class MapVisualiser:
-    def __init__(self, dcloader_instance: DcLoader, load_from_file: str = None):
+    
+    PossibleModels = {"dlr","lst","tuw","ensemble"}
+
+    def __init__(self, dcloader_instance: DcLoader = None, load_from_file: str = None):
         """
         Initializes the visualizer with a completed DcLoader instance.
 
@@ -66,10 +71,16 @@ class MapVisualiser:
             self.original_crs = dcloader_instance.crs
             self.bounding_box = dcloader_instance.bounding_box
             self.refined_data = {}
-            self.plottable_data = {}
+            self.plottable_data = {} # here we store the reprojected and clipped dataarrays for mapping 
             self.polygons_data = {}
             self.flood_variables = [var for var in self.dc.data_vars.keys() if var not in req_vars]
 
+    def __str__(self):
+        return f"""Bounding Box: {self.bounding_box}
+        Flood variables: {len(self.flood_variables)}
+        Refined variables: {len(self.refined_data)} 
+        Plottable variables: {len(self.plottable_data)}
+        Polygon variables: {len(self.polygons_data)}"""
 
     @staticmethod
     def remove_all_holes(geom):
@@ -235,6 +246,21 @@ class MapVisualiser:
         
         return visualiser
 
+    @staticmethod
+    def _validate_expression_syntax(expression: str) -> bool:
+        """Validates expression safety"""
+        dangerous = [
+            r'__\w+__',
+            r'import\s',
+            r'exec\s*\(',
+            r'eval\s*\(',
+            r'open\s*\(',
+            r'compile\s*\(',
+            r'globals\s*\(',
+            r'locals\s*\(',
+        ]
+        return not any(re.search(p, expression) for p in dangerous)
+    
     def select_and_refine_variable(self, variable_name: str, time_index: int = 0):
         """
         Selects a variable, applies exclusion and water masks to refine it.
@@ -296,7 +322,7 @@ class MapVisualiser:
         for vars in self.flood_variables:
             self.prepare_for_map_overlay(vars)
 
-    def build_polygons(self, variable_name: str, smooth_distance: float = 0.0001):
+    def build_polygons(self, variable_name: str, smooth_distance: float = 0.0001, threshold: float = 0.0, save_to_polygons: bool = False) -> gpd.GeoDataFrame:
         """
         Converts raster flood data to smooth vector polygons with holes filled.
         
@@ -315,10 +341,10 @@ class MapVisualiser:
         print(f"Building polygons for '{variable_name}'...")
         
         # Get the plottable data
-        variable_mat = self.plottable_data[variable_name].where(self.plottable_data[variable_name] == 1)
+        variable_mat = self.plottable_data[variable_name].where(self.plottable_data[variable_name] > threshold)
         
         # Create binary mask for flood extent
-        mask = (variable_mat > 0)
+        mask = (variable_mat > threshold)
         
         # Convert raster to vector polygons
         shapes_gen = features.shapes(
@@ -326,29 +352,27 @@ class MapVisualiser:
             mask=~np.isnan(variable_mat.values),
             transform=variable_mat.rio.transform()
         )
-        
-        # Extract only polygons where mask == 1
-        polygons = [shape(geom) for geom, val in shapes_gen if val == 1]
+
+        # Extract only polygons where mask > 0
+        polygons = [shape(geom) for geom, val in shapes_gen if val > threshold]
         
         if not polygons:
             print(f"Warning: No flood polygons found for '{variable_name}'")
             # Return empty GeoDataFrame with proper CRS
-            gdf = gpd.GeoDataFrame(geometry=[], crs=variable_mat.rio.crs)
+            gdf = gpd.GeoDataFrame(geometry=[], crs=self.original_crs)
             self.polygons_data[variable_name] = gdf
             return gdf
         
         # Build GeoDataFrame
-        gdf = gpd.GeoDataFrame(geometry=polygons, crs=variable_mat.rio.crs)
+        gdf = gpd.GeoDataFrame(geometry=polygons, crs=self.original_crs)
         
         # Fill all holes
         print(f"  Filling holes in polygons...")
         gdf["geometry"] = gdf["geometry"].apply(self.remove_all_holes)
         
-        print(f"  Smoothing polygons...")
-        original_crs = gdf.crs
-        
+        print(f"  Smoothing polygons...")        
         # Check if CRS is geographic (uses degrees)
-        if original_crs.is_geographic:
+        if self.original_crs.is_geographic:
             # Get center point of bounding box for CRS selection
             bounds = gdf.total_bounds  # [minx, miny, maxx, maxy]
             center_lon = (bounds[0] + bounds[2]) / 2
@@ -359,8 +383,8 @@ class MapVisualiser:
             region_name = self.get_region_name(center_lon, center_lat)
             
             print(f"    Region detected: {region_name}")
-            print(f"    Converting from {original_crs} to {projected_crs} for accurate buffering...")
-            
+            print(f"    Converting from {self.original_crs} to {projected_crs} for accurate buffering...")
+
             # Reproject to projected CRS
             gdf_projected = gdf.to_crs(projected_crs)
             
@@ -378,18 +402,19 @@ class MapVisualiser:
             gdf_projected["geometry"] = gdf_projected.buffer(smooth_distance_meters).buffer(-smooth_distance_meters)
             
             # Reproject back to original CRS (WGS84) for web mapping
-            gdf = gdf_projected.to_crs(original_crs)
-            
-            print(f"    Converted back to {original_crs}")
+            gdf = gdf_projected.to_crs(self.original_crs)
+
+            print(f"    Converted back to {self.original_crs}")
         else:
             # CRS is already projected, use smooth_distance as-is
             print(f"    Using projected CRS, buffer distance: {smooth_distance} units")
             gdf["geometry"] = gdf.buffer(0)
             gdf = gdf.explode(ignore_index=True)
             gdf["geometry"] = gdf.buffer(smooth_distance).buffer(-smooth_distance)
-        
-        self.polygons_data[variable_name] = gdf
-        
+
+        if save_to_polygons:
+            self.polygons_data[variable_name] = gdf
+
         print(f"Polygons built successfully for '{variable_name}'. Found {len(gdf)} polygon(s).")
         return gdf
     
@@ -411,7 +436,129 @@ class MapVisualiser:
         
         print(f"All polygons built successfully. Total: {len(self.polygons_data)} variable(s).")
     
-    def plot_refined_data_grid(self, cmap='Blues', figsize=(20, 20), sample_rate=4):
+    def apply_plottable(self, expression: str, output_name: str = None, save_to_plottable: bool = False) -> xr.DataArray:
+        """
+        Applies a mathematical expression element-wise on plottable data variables.
+        
+        Supports basic operations: +, -, *, /, //, %, ** (power)
+        Also supports parentheses for operation precedence.
+        
+        Args:
+            expression (str): Mathematical expression using variable names from plottable_data.
+                            Example: "tuw_likelihood * tuw_flood_extent"
+                            Example: "(tuw_likelihood + 0.5) * tuw_flood_extent"
+            output_name (str, optional): Name for the resulting DataArray. 
+                                        Defaults to the expression string.
+        
+        Returns:
+            xr.DataArray: Result of the mathematical operation.
+        
+        Raises:
+            ValueError: If variables don't exist or have incompatible shapes.
+            SyntaxError: If expression contains invalid operations.
+        
+        Examples:
+            >>> # Multiply two variables
+            >>> result = visualiser.apply_plottable("tuw_likelihood * tuw_flood_extent")
+            
+            >>> # Complex expression
+            >>> result = visualiser.apply_plottable("(tuw_likelihood + 0.5) * tuw_flood_extent / 2")
+            
+            >>> # Save result to plottable_data
+            >>> result = visualiser.apply_plottable("tuw_likelihood * tuw_flood_extent", 
+            ...                                      output_name="combined_risk")
+            >>> visualiser.plottable_data["combined_risk"] = result
+        """
+        if not self.plottable_data:
+            raise RuntimeError("No plottable data available. Run prepare_for_map_overlay_all_vars() first.")
+        
+        print(f"Parsing expression: '{expression}'")
+        
+        var_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b'
+        potential_vars = re.findall(var_pattern, expression)
+        
+        # Filter out Python keywords and numeric literals
+        python_keywords = {'and', 'or', 'not', 'in', 'is', 'True', 'False', 'None'}
+        variables_in_expr = [v for v in potential_vars if v not in python_keywords]
+        
+        # Remove duplicates while preserving order
+        variables_in_expr = list(dict.fromkeys(variables_in_expr))        
+        # Validate that all variables exist in plottable_data
+        missing_vars = [v for v in variables_in_expr if v not in self.plottable_data]
+        if missing_vars:
+            available = list(self.plottable_data.keys())
+            raise ValueError(
+                f"Variables not found in plottable_data: {missing_vars}\n"
+                f"Available variables: {available}"
+            )
+        
+        if variables_in_expr:
+            reference_var = variables_in_expr[0]
+            reference_shape = self.plottable_data[reference_var].shape
+            reference_coords = self.plottable_data[reference_var].coords
+            
+            # Validate that all variables have the same shape
+            print(f"  Validating shapes (reference: {reference_shape})...")
+            for var_name in variables_in_expr:
+                var_shape = self.plottable_data[var_name].shape
+                if var_shape != reference_shape:
+                    raise ValueError(
+                        f"Shape mismatch: '{var_name}' has shape {var_shape}, "
+                        f"but '{reference_var}' has shape {reference_shape}. "
+                        f"All variables must have the same dimensions."
+                    )
+            print(f"  ✓ All variables have compatible shapes")
+        
+        namespace = {
+            var_name: self.plottable_data[var_name] 
+            for var_name in variables_in_expr
+        }
+        
+        # Validate expression safety (no dangerous operations)
+        # Allow only mathematical operators and parentheses
+        safe_chars = set('0123456789+-*/()%. abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_')
+        if not all(c in safe_chars for c in expression.replace(' ', '')):
+            raise SyntaxError(
+                f"Expression contains invalid characters. "
+                f"Only alphanumeric, operators (+, -, *, /, //, %, **), and parentheses are allowed."
+            )
+        
+        # Evaluate the expression
+        print(f"  Evaluating expression...")
+        try:
+            result = eval(expression, {"__builtins__": {}}, namespace)
+        except NameError as e:
+            raise ValueError(f"Invalid variable in expression: {e}")
+        except Exception as e:
+            raise SyntaxError(f"Error evaluating expression: {e}")
+        
+        # Ensure result is a DataArray
+        if not isinstance(result, xr.DataArray):
+            # If result is a scalar, broadcast it to match the reference shape
+            if variables_in_expr:
+                result = xr.DataArray(
+                    data=np.full(reference_shape, result),
+                    coords=reference_coords,
+                    dims=self.plottable_data[reference_var].dims
+                )
+            else:
+                raise ValueError("Expression must contain at least one variable from plottable_data")
+        
+        if output_name is None:
+            output_name = expression
+        result.name = output_name
+
+        if save_to_plottable:
+            self.plottable_data[output_name] = result
+            print(f"  Saved to plottable_data['{output_name}']")
+        
+        print(f"✓ Expression evaluated successfully")
+        print(f"  Result shape: {result.shape}")
+        print(f"  Result name: '{result.name}'")
+        
+        return result
+
+    def plot_refined_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], figsize=(20, 20), sample_rate=0):
         """
         Plots all refined data variables in a grid layout using matplotlib.
         
@@ -427,7 +574,10 @@ class MapVisualiser:
             raise RuntimeError("No refined data available. Run select_and_refine_all_vars() first.")
         
         # Limit to first 16 variables
-        variables = list(self.refined_data.keys())[:16]
+        if variables is None:
+            variables = list(self.refined_data.keys())[:16]
+        else:
+            variables = [var for var in variables if var in self.refined_data][:16]
         n_vars = len(variables)
         
         # Calculate grid dimensions
@@ -464,7 +614,70 @@ class MapVisualiser:
         print("Grid plot created successfully.")
         return fig
 
-    def plot_plottable_data_grid(self, cmap='Blues', tiles='OSM', alpha=0.7, frame_width=300, frame_height=250):
+    def plot_refined_data(self, variable_name: str, cmap=COLOR_PALETTES['light_to_strong_blue']):
+        """
+        Plots a single refined data variable using matplotlib.
+        
+        Args:
+            variable_name (str): The name of the variable to plot.
+            cmap (str): The colormap to use for plotting.
+        
+        Returns:
+            matplotlib.figure.Figure: The generated figure.
+        """
+        if variable_name not in self.refined_data:
+            raise RuntimeError(f"Variable '{variable_name}' not found in refined_data. "
+                               f"Run select_and_refine_variable('{variable_name}') first.")
+        
+        print(f"Plotting refined variable '{variable_name}'...")
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        im = self.refined_data[variable_name].plot(
+            ax=ax, cmap=cmap, add_colorbar=True
+        )
+        ax.set_title(variable_name, fontsize=14, fontweight='bold')
+        ax.set_xlabel('X', fontsize=12)
+        ax.set_ylabel('Y', fontsize=12)
+        
+        plt.tight_layout()
+        print("Plot created successfully.")
+        return fig
+    
+    def plot_plottable_data(self, variable_name: str, cmap=COLOR_PALETTES['light_to_strong_blue']): 
+        """
+        Plots a single plottable data variable using hvplot.
+        
+        Args:
+            variable_name (str): The name of the variable to plot.
+            cmap (str or list): The colormap to use for plotting.
+        
+        Returns:
+            hvplot object: An interactive map visualization.
+        """
+        if variable_name not in self.plottable_data:
+            raise RuntimeError(f"Variable '{variable_name}' not found in plottable_data. "
+                               f"Run prepare_for_map_overlay('{variable_name}') first.")
+        
+        print(f"Creating interactive map for '{variable_name}'...")
+        
+        plot = self.plottable_data[variable_name].hvplot.image(
+            x='x', y='y',
+            geo=True,
+            tiles='OSM',
+            cmap=cmap,
+            alpha=0.7,
+            frame_width=600,
+            frame_height=400,
+            title=variable_name,
+            colorbar=True,
+            xlabel="Longitude",
+            ylabel="Latitude"
+        )
+        
+        print("Interactive map created successfully.")
+        return plot
+
+    def plot_plottable_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], tiles='OSM', alpha=0.7, frame_width=300, frame_height=250):
         """
         Plots all plottable data variables in a grid layout using hvplot.
         
@@ -482,7 +695,10 @@ class MapVisualiser:
             raise RuntimeError("No plottable data available. Run prepare_for_map_overlay_all_vars() first.")
         
         # Limit to first 16 variables
-        variables = list(self.plottable_data.keys())[:16]
+        if variables is None:   
+            variables = list(self.plottable_data.keys())[:16]
+        else: 
+            variables = [var for var in variables if var in self.plottable_data][:16]
         n_vars = len(variables)
         
         # Calculate grid dimensions
@@ -492,41 +708,33 @@ class MapVisualiser:
             n_rows, n_cols = 3, 3
         else:
             n_rows, n_cols = 4, 4
-        
-        print(f"Creating interactive map grid for {n_vars} variables in a {n_rows}x{n_cols} layout...")
-        
-        plots = []
-        for var_name in variables:
-            plot = self.plottable_data[var_name].hvplot.image(
-                x='x', y='y',
-                geo=True,
-                tiles=tiles,
-                cmap=cmap,
-                alpha=alpha,
-                frame_width=frame_width,
-                frame_height=frame_height,
-                title=var_name,
-                colorbar=False,
-                xlabel="",
-                ylabel=""
-            )
-            plots.append(plot)
-        
-        # Create grid layout
-        grid_plots = []
-        for i in range(0, len(plots), n_cols):
-            row = plots[i:i + n_cols]
-            # Pad row with empty plots if needed
-            while len(row) < n_cols:
-                row.append(hv.Div(''))
-            grid_plots.append(hv.Layout(row))
-        
-        final_layout = hv.Layout(grid_plots).cols(1)
-        
-        print("Interactive map grid created successfully.")
-        return final_layout
 
-    def plot_polygons_grid(self, color="darkred", alpha=0.7, tiles='OSM', frame_width=300, frame_height=250):
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(frame_height, frame_width), sharex=True, sharey=True)
+        axes = axes.flatten() if n_vars > 1 else [axes]
+        
+        print(f"Plotting {n_vars} refined variables in a {n_rows}x{n_cols} grid...")
+       
+        for idx, var_name in enumerate(variables):
+            ax = axes[idx]
+            
+            # Sample data for faster plotting
+            data = self.plottable_data[var_name]
+            
+            # Plot
+            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, cbar_kwargs={'shrink': 0.8})
+            ax.set_title(var_name, fontsize=10, fontweight='bold')
+            ax.set_xlabel('X', fontsize=8)
+            ax.set_ylabel('Y', fontsize=8)
+        
+        # Hide unused subplots
+        for idx in range(n_vars, len(axes)):
+            axes[idx].axis('off')
+        
+        plt.tight_layout()
+        print("Grid plot created successfully.")
+        return fig
+    
+    def plot_polygons_grid(self, color="darkred", alpha=0.7, figzise=(20, 20), edge_color="black", linewidth=0.5):
         """
         Plots all polygon data in a grid layout using hvplot.
         """
@@ -544,39 +752,33 @@ class MapVisualiser:
             n_rows, n_cols = 4, 4
         
         print(f"Creating polygon map grid for {n_vars} variables in a {n_rows}x{n_cols} layout...")
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figzise, sharex=True, sharey=True)
+        axes = axes.flatten() if n_vars > 1 else [axes]
         
         plots = []
-        for var_name in tqdm(variables, desc="Creating polygon grid", unit="map"):
+        for idx, var_name in tqdm(enumerate(variables), desc="Creating polygon grid", unit="map"):
+            ax = axes[idx]
             gdf = self.polygons_data[var_name]
-            
-            if len(gdf) > 0:
-                plot = gdf.hvplot.polygons(
-                    geo=True,
-                    tiles=tiles,
-                    color=color,
-                    alpha=alpha,
-                    frame_width=frame_width,
-                    frame_height=frame_height,
-                    title=var_name,
-                    hover_cols=[],
-                    legend=False
-                )
-            else:
-                plot = hv.Div(f'<p style="text-align:center">No polygons for {var_name}</p>')
-            
-            plots.append(plot)
+
+            gdf.plot(
+                ax=ax,
+                color=color,
+                alpha=alpha,
+                edgecolor=edge_color,
+                linewidth=linewidth
+            )
+            ax.set_title(var_name, fontsize=10, fontweight='bold')
+            ax.set_xlabel('Longitude', fontsize=8)
+            ax.set_ylabel('Latitude', fontsize=8)
+            ax.tick_params(axis='both', which='major', labelsize=7)
         
-        grid_plots = []
-        for i in range(0, len(plots), n_cols):
-            row = plots[i:i + n_cols]
-            while len(row) < n_cols:
-                row.append(hv.Div(''))
-            grid_plots.append(hv.Layout(row))
+        for idx in range(n_vars, len(axes)):
+            axes[idx].axis('off') 
         
-        final_layout = hv.Layout(grid_plots).cols(1)
-        
-        print("Polygon map grid created successfully.")
-        return final_layout
+        plt.tight_layout()
+        print("Polygon grid plot created successfully.")
+        return fig
     
     def plot_on_map(self, variable_name,cmap: list, alpha: float = 0.1, title: str = None, tiles: str = "OSM"):
         """
@@ -762,84 +964,3 @@ class MapVisualiser:
         print(f"✓ MapVisualiser saved successfully to {base_path}")
         print(f"  Main file: {base_path}.mapvis")
         print(f"  Total files created: {len([f for f in os.listdir(os.path.dirname(base_path) if os.path.dirname(base_path) else '.') if os.path.basename(base_path) in f])}")
-
-    # def build_from_file(self, filepath: str):
-    #     """
-    #     Loads a MapVisualiser from a saved file.
-        
-    #     Args:
-    #         filepath (str): Path to the .mapvis index file or base path.
-    #     """
-    #     # Handle different file path formats
-    #     if not filepath.endswith('.mapvis'):
-    #         filepath = f"{filepath}.mapvis"
-        
-    #     if not os.path.exists(filepath):
-    #         raise FileNotFoundError(f"MapVisualiser file not found: {filepath}")
-        
-    #     print(f"Loading MapVisualiser from {filepath}...")
-        
-    #     # Load index
-    #     with open(filepath, 'r') as f:
-    #         import json
-    #         index = json.load(f)
-        
-    #     base_path = index['base_path']
-    #     files = index['files']
-        
-    #     # Create progress bar
-    #     total_steps = 4 + len(files.get('polygons', {}))
-    #     pbar = tqdm(total=total_steps, desc="Loading MapVisualiser", unit="step")
-        
-    #     # 1. Load metadata
-    #     pbar.set_postfix_str("Loading metadata")
-    #     with open(files['metadata'], 'rb') as f:
-    #         metadata = pickle.load(f)
-        
-    #     self.original_crs = metadata['original_crs']
-    #     self.bounding_box = metadata['bounding_box']
-    #     self.flood_variables = metadata['flood_variables']
-    #     pbar.update(1)
-        
-    #     # 2. Load datacube
-    #     pbar.set_postfix_str("Loading datacube")
-    #     self.dc = xr.open_dataset(files['datacube'])
-    #     pbar.update(1)
-        
-    #     # 3. Load refined_data
-    #     pbar.set_postfix_str("Loading refined data")
-    #     self.refined_data = {}
-    #     if files['refined'] and os.path.exists(files['refined']):
-    #         refined_ds = xr.open_dataset(files['refined'])
-    #         self.refined_data = {var: refined_ds[var] for var in metadata['refined_variables']}
-    #     pbar.update(1)
-        
-    #     # 4. Load plottable_data
-    #     pbar.set_postfix_str("Loading plottable data")
-    #     self.plottable_data = {}
-    #     if files['plottable'] and os.path.exists(files['plottable']):
-    #         plottable_ds = xr.open_dataset(files['plottable'])
-    #         self.plottable_data = {var: plottable_ds[var] for var in metadata['plottable_variables']}
-    #     pbar.update(1)
-        
-    #     # 5. Load polygons_data
-    #     self.polygons_data = {}
-    #     if files['polygons']:
-    #         pbar.set_postfix_str("Loading polygons")
-    #         for var_name, poly_file in files['polygons'].items():
-    #             if os.path.exists(poly_file):
-    #                 self.polygons_data[var_name] = gpd.read_file(poly_file)
-    #             pbar.update(1)
-        
-    #     pbar.close()
-        
-    #     print(f"✓ MapVisualiser loaded successfully")
-    #     print(f"  CRS: {self.original_crs}")
-    #     print(f"  Bounding box: {self.bounding_box}")
-    #     print(f"  Flood variables: {len(self.flood_variables)}")
-    #     print(f"  Refined variables: {len(self.refined_data)}")
-    #     print(f"  Plottable variables: {len(self.plottable_data)}")
-    #     print(f"  Polygon variables: {len(self.polygons_data)}")
-    #     print(f"  Saved on: {metadata['save_timestamp']}")
-    
-    
