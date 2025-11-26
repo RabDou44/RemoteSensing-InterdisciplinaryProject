@@ -24,7 +24,7 @@ import xarray as xr
 from datetime import datetime
 import re
 from color_schemes import COLOR_PALETTES
-
+import pyproj
 class MapVisualiser:
     
     PossibleModels = {"dlr","lst","tuw","ensemble"}
@@ -68,7 +68,7 @@ class MapVisualiser:
                     raise ValueError(f"The provided DcLoader instance must have the required data variables loaded: {var}")
             
             self.dc = dcloader_instance.dc
-            self.original_crs = dcloader_instance.crs
+            self.original_crs = self._normalize_crs(dcloader_instance.crs)
             self.bounding_box = dcloader_instance.bounding_box
             self.refined_data = {}
             self.plottable_data = {} # here we store the reprojected and clipped dataarrays for mapping 
@@ -90,6 +90,38 @@ class MapVisualiser:
             return type(geom)([Polygon(p.exterior) for p in geom.geoms])
         else:
             return geom
+    
+    @staticmethod
+    def _normalize_crs(crs_input) -> pyproj.CRS:
+        """
+        Converts any CRS format to a pyproj.CRS object.
+        
+        Args:
+            crs_input: Can be a string (EPSG, WKT, PROJ), pyproj.CRS, or None
+        
+        Returns:
+            pyproj.CRS: A proper CRS object
+        
+        Raises:
+            ValueError: If CRS cannot be parsed
+        """
+        if crs_input is None:
+            raise ValueError("CRS cannot be None")
+        
+        if isinstance(crs_input, pyproj.CRS):
+            return crs_input
+        
+        if isinstance(crs_input, str):
+            try:
+                # Try different parsing methods
+                if crs_input.startswith('EPSG:'):
+                    return pyproj.CRS.from_string(crs_input)
+                elif 'PROJCS' in crs_input or 'GEOGCS' in crs_input:
+                    return pyproj.CRS.from_wkt(crs_input)
+                else:
+                    return pyproj.CRS.from_string(crs_input)
+            except Exception as e:
+                raise ValueError(f"Could not parse CRS string: {crs_input}. Error: {e}")
         
     @staticmethod
     def get_optimal_projected_crs(lon: float, lat: float, bounds: tuple = None) -> str:
@@ -198,7 +230,7 @@ class MapVisualiser:
         with open(files['metadata'], 'rb') as f:
             metadata = pickle.load(f)
         
-        visualiser.original_crs = metadata['original_crs']
+        visualiser.original_crs = MapVisualiser._normalize_crs(metadata['original_crs'])
         visualiser.bounding_box = metadata['bounding_box']
         visualiser.flood_variables = metadata['flood_variables']
         pbar.update(1)
@@ -337,6 +369,10 @@ class MapVisualiser:
         if variable_name not in self.plottable_data:
             raise RuntimeError(f"Variable '{variable_name}' not found in plottable_data. "
                              f"Run prepare_for_map_overlay('{variable_name}') first.")
+        
+        if variable_name in self.polygons_data:
+            print(f"Polygons for '{variable_name}' already exist. Returning existing polygons.")
+            return self.polygons_data[variable_name]
         
         print(f"Building polygons for '{variable_name}'...")
         

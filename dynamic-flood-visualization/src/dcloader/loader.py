@@ -118,13 +118,12 @@ class DcLoader:
             raise ValueError("No GFM items found for the given time range and bounding box.")
 
         crs = pyproj.CRS.from_wkt(gfm_items[0].properties["proj:wkt2"])
-        self.crs = crs.to_string()
         self.resolution = gfm_items[0].properties['gsd']
-        
+        self.crs = crs
         gfm_dc = odc_stac.load(
             gfm_items,
             bbox=bounding_box,
-            crs=self.crs,  # Use string representation of CRS
+            crs=self.crs.to_string(),  # Use string representation of CRS
             resolution=self.resolution,  # Use scalar resolution
             dtype='uint8',
             chunks={"x": 1024, "y": 1024, "time": 1000}
