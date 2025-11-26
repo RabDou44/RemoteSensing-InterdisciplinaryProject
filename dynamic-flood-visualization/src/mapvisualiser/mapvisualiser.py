@@ -24,7 +24,7 @@ import xarray as xr
 from datetime import datetime
 import re
 from color_schemes import COLOR_PALETTES
-
+from pathlib import Path
 class MapVisualiser:
     
     PossibleModels = {"dlr","lst","tuw","ensemble"}
@@ -169,12 +169,11 @@ class MapVisualiser:
         Raises:
             FileNotFoundError: If the specified file doesn't exist.
         """
-        # Handle different file path formats
-        if not filepath.endswith('.mapvis'):
-            filepath = f"{filepath}.mapvis"
-        
-        if not os.path.exists(filepath):
+        filepath = Path(filepath)
+        if not filepath.exists():
             raise FileNotFoundError(f"MapVisualiser file not found: {filepath}")
+        
+        # check proper format of dir
         
         print(f"Loading MapVisualiser from {filepath}...")
         
@@ -245,6 +244,22 @@ class MapVisualiser:
         print(f"  Saved on: {metadata['save_timestamp']}")
         
         return visualiser
+    
+    @staticmethod
+    def IsMapVisualiserDir(base_file: str) -> bool:
+        """
+        Checks if the given path corresponds to a saved MapVisualiser directory.
+        
+        Args:
+            base_file (str): Path to check.
+
+        """
+        base_path = Path(base_file)
+        if base_path.exists() or not base_path.is_dir():
+            return False
+
+        # find mapvis file
+        
 
     @staticmethod
     def _validate_expression_syntax(expression: str) -> bool:
@@ -863,7 +878,7 @@ class MapVisualiser:
         
         return polygon_map
 
-    def save_to_file(self, filepath: str, compress: bool = True):
+    def save_to_file(self, filepath: str, name: str, compress: bool = True):
         """
         Saves the entire MapVisualiser state to a file.
         
@@ -878,11 +893,17 @@ class MapVisualiser:
         """
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else '.', exist_ok=True)
-        
         base_path = filepath.replace('.mapvis', '')  # Remove extension if provided
+        save_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        name_visualiser = save_timestamp + "_MapVisualiser_" + name 
+        base_path = Path(base_path) / name_visualiser
+        base_path.mkdir(parents=True, exist_ok=True)
         
         print(f"Saving MapVisualiser to {base_path}...")
-        
+
+        # Create MapVisualiser directory
+        # BasePath  = Path(base_path) \ 
+    
         # Create a progress bar
         total_steps = 4 + len(self.refined_data) + len(self.plottable_data) + len(self.polygons_data)
         pbar = tqdm(total=total_steps, desc="Saving MapVisualiser", unit="step")
@@ -896,71 +917,75 @@ class MapVisualiser:
             'refined_variables': list(self.refined_data.keys()),
             'plottable_variables': list(self.plottable_data.keys()),
             'polygon_variables': list(self.polygons_data.keys()),
-            'save_timestamp': datetime.now().isoformat(),
+            'save_timestamp': save_timestamp,
             'version': '1.0'
         }
-        
-        with open(f"{base_path}_metadata.pkl", 'wb') as f:
+        metadata_path = base_path / f"{name}_metadata.pkl"
+        with open(metadata_path, 'wb') as f:
             pickle.dump(metadata, f)
         pbar.update(1)
         
         # 2. Save main datacube
+        datacube_path = base_path / f"{name}_datacube.nc"
         pbar.set_postfix_str("Saving datacube")
         if compress:
             encoding = {var: {'zlib': True, 'complevel': 5} for var in self.dc.data_vars}
-            self.dc.to_netcdf(f"{base_path}_datacube.nc", encoding=encoding)
+            self.dc.to_netcdf(datacube_path, encoding=encoding)
         else:
-            self.dc.to_netcdf(f"{base_path}_datacube.nc")
+            self.dc.to_netcdf(datacube_path)
         pbar.update(1)
         
         # 3. Save refined_data
+        refined_path = base_path / f"{name}_refined.nc"
         pbar.set_postfix_str("Saving refined data")
         if self.refined_data:
             refined_ds = xr.Dataset(self.refined_data)
             if compress:
                 encoding = {var: {'zlib': True, 'complevel': 5} for var in refined_ds.data_vars}
-                refined_ds.to_netcdf(f"{base_path}_refined.nc", encoding=encoding)
+                refined_ds.to_netcdf(refined_path, encoding=encoding)
             else:
-                refined_ds.to_netcdf(f"{base_path}_refined.nc")
+                refined_ds.to_netcdf(refined_path)
         pbar.update(1)
         
         # 4. Save plottable_data
+        plottable_ds_path = base_path / f"{name}_plottable.nc"
         pbar.set_postfix_str("Saving plottable data")
         if self.plottable_data:
             plottable_ds = xr.Dataset(self.plottable_data)
             if compress:
                 encoding = {var: {'zlib': True, 'complevel': 5} for var in plottable_ds.data_vars}
-                plottable_ds.to_netcdf(f"{base_path}_plottable.nc", encoding=encoding)
+                plottable_ds.to_netcdf(plottable_ds_path, encoding=encoding)
             else:
-                plottable_ds.to_netcdf(f"{base_path}_plottable.nc")
+                plottable_ds.to_netcdf(plottable_ds_path)
         pbar.update(1)
         
         # 5. Save polygons_data
+        polygon_path = base_path / f"{name}_polygons"
         if self.polygons_data:
             pbar.set_postfix_str("Saving polygons")
             for var_name, gdf in self.polygons_data.items():
                 if len(gdf) > 0:
-                    gdf.to_file(f"{base_path}_polygon_{var_name}.gpkg", driver='GPKG')
+                    gdf.to_file(f"{polygon_path}_{var_name}.gpkg", driver='GPKG')
                 pbar.update(1)
-        
         pbar.close()
         
         # Create an index file
         index = {
             'base_path': base_path,
             'files': {
-                'metadata': f"{base_path}_metadata.pkl",
-                'datacube': f"{base_path}_datacube.nc",
-                'refined': f"{base_path}_refined.nc" if self.refined_data else None,
-                'plottable': f"{base_path}_plottable.nc" if self.plottable_data else None,
-                'polygons': {var: f"{base_path}_polygon_{var}.gpkg" for var in self.polygons_data.keys()} if self.polygons_data else {}
+                'metadata': metadata_path,
+                'datacube': datacube_path,
+                'refined': refined_path if self.refined_data else None,
+                'plottable': plottable_ds_path if self.plottable_data else None,
+                'polygons': {var: f"{polygon_path}_{var}.gpkg" for var in self.polygons_data.keys()} if self.polygons_data else {}
             }
         }
         
-        with open(f"{base_path}.mapvis", 'w') as f:
+        mapvis_path = base_path / f"{name}.mapvis"
+        with open(mapvis_path, 'w') as f:
             import json
             json.dump(index, f, indent=2)
         
         print(f"✓ MapVisualiser saved successfully to {base_path}")
-        print(f"  Main file: {base_path}.mapvis")
-        print(f"  Total files created: {len([f for f in os.listdir(os.path.dirname(base_path) if os.path.dirname(base_path) else '.') if os.path.basename(base_path) in f])}")
+        print(f"  Main file: {mapvis_path}")
+        print(f"  Total files created: {len([f for f in os.listdir(os.path.dirname(mapvis_path) if os.path.dirname(mapvis_path) else '.') if os.path.basename(mapvis_path) in f])}")

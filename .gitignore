@@ -69,3 +69,6 @@ dmypy.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# data  folder
+dynamic-flood-visualization/data/
