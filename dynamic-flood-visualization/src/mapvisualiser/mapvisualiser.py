@@ -11,6 +11,7 @@ from bokeh.core.property.dataspec import DataSpec
 from dcloader.loader import DcLoader
 from typing import List
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 import rioxarray as rio
 import holoviews as hv
 import geopandas as gpd
@@ -328,7 +329,7 @@ class MapVisualiser:
         for vars in self.flood_variables:
             self.select_and_refine_variable(vars)
 
-    def prepare_for_map_overlay(self, variable_name: str):
+    def prepare_for_map_overlay(self, variable_name: str, save_to_plottable: bool = True) -> xr.DataArray:
         """
         Reprojects and clips the refined data to prepare it for map overlay.
         """
@@ -345,14 +346,18 @@ class MapVisualiser:
         
         # Clip to the precise bounding box to ensure clean edges
         min_lon, min_lat, max_lon, max_lat = self.bounding_box
-        self.plottable_data[variable_name] = reprojected_data.rio.clip_box(
-            minx=min_lon, maxx=max_lon, miny=min_lat, maxy=max_lat
-        )
-        print(f"{variable_name} prepared for plotting.")
 
-    def prepare_for_map_overlay_all_vars(self):
+        plottable_data = reprojected_data.rio.clip_box(
+                minx=min_lon, maxx=max_lon, miny=min_lat, maxy=max_lat
+            )
+        
+        if save_to_plottable:
+            self.plottable_data[variable_name] = plottable_data
+        return plottable_data
+
+    def prepare_for_map_overlay_all_vars(self, variables: List[str] = None, save_to_plottable: bool = True):
         for vars in self.flood_variables:
-            self.prepare_for_map_overlay(vars)
+            self.prepare_for_map_overlay(vars, save_to_plottable=save_to_plottable)
 
     def build_polygons(self, variable_name: str, smooth_distance: float = 0.0001, threshold: float = 0.0, save_to_polygons: bool = False) -> gpd.GeoDataFrame:
         """
@@ -593,13 +598,24 @@ class MapVisualiser:
         print(f"  Result name: '{result.name}'")
         
         return result
+    
+    @staticmethod
+    def __getGridDimensions__(n_vars: int) -> typing.Tuple[int, int]:
+        """Calculates optimal grid dimensions for plotting n_vars subplots."""
+        if n_vars <= 3:
+            return 1, n_vars
+        else: 
+            n_cols = int(np.ceil(np.sqrt(n_vars)))
+            n_rows = int(np.ceil(n_vars / n_cols))
+            return n_rows, n_cols
 
-    def plot_refined_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], figsize=(20, 20), sample_rate=0):
+    def plot_refined_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue']):
         """
         Plots all refined data variables in a grid layout using matplotlib.
         
         Args:
-            cmap (str): The colormap to use for plotting.
+            cmap (str or list): The colormap to use for plotting. Can be a matplotlib colormap name
+                                or a list of hex colors that will be converted to a ListedColormap.
             figsize (tuple): The figure size (width, height).
             sample_rate (int): Sample every nth pixel for faster plotting.
         
@@ -609,6 +625,10 @@ class MapVisualiser:
         if not self.refined_data:
             raise RuntimeError("No refined data available. Run select_and_refine_all_vars() first.")
         
+        # Convert color list to ListedColormap if needed
+        if isinstance(cmap, list):
+            cmap = ListedColormap(cmap)
+        
         # Limit to first 16 variables
         if variables is None:
             variables = list(self.refined_data.keys())[:16]
@@ -617,12 +637,8 @@ class MapVisualiser:
         n_vars = len(variables)
         
         # Calculate grid dimensions
-        if n_vars <= 4:
-            n_rows, n_cols = 2, 2
-        elif n_vars <= 9:
-            n_rows, n_cols = 3, 3
-        else:
-            n_rows, n_cols = 4, 4
+        n_rows, n_cols = self.__getGridDimensions__(n_vars)
+        figsize = (5* n_cols, 5 * n_rows)
         
         fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True)
         axes = axes.flatten() if n_vars > 1 else [axes]
@@ -633,11 +649,9 @@ class MapVisualiser:
             ax = axes[idx]
             
             # Sample data for faster plotting
-            data = self.refined_data[var_name]
-            sampled_data = data[::sample_rate, ::sample_rate]
-            
+            data = self.refined_data[var_name]            
             # Plot
-            im = sampled_data.plot(ax=ax, cmap=cmap, add_colorbar=True, cbar_kwargs={'shrink': 0.8})
+            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, cbar_kwargs={'shrink': 0.8})
             ax.set_title(var_name, fontsize=10, fontweight='bold')
             ax.set_xlabel('X', fontsize=8)
             ax.set_ylabel('Y', fontsize=8)
@@ -647,6 +661,7 @@ class MapVisualiser:
             axes[idx].axis('off')
         
         plt.tight_layout()
+        plt.close(fig)  # Close to prevent auto-display and memory leaks
         print("Grid plot created successfully.")
         return fig
 
@@ -656,7 +671,8 @@ class MapVisualiser:
         
         Args:
             variable_name (str): The name of the variable to plot.
-            cmap (str): The colormap to use for plotting.
+            cmap (str or list): The colormap to use for plotting. Can be a matplotlib colormap name
+                                or a list of hex colors that will be converted to a ListedColormap.
         
         Returns:
             matplotlib.figure.Figure: The generated figure.
@@ -664,6 +680,10 @@ class MapVisualiser:
         if variable_name not in self.refined_data:
             raise RuntimeError(f"Variable '{variable_name}' not found in refined_data. "
                                f"Run select_and_refine_variable('{variable_name}') first.")
+        
+        # Convert color list to ListedColormap if needed
+        if isinstance(cmap, list):
+            cmap = ListedColormap(cmap)
         
         print(f"Plotting refined variable '{variable_name}'...")
         
@@ -676,6 +696,7 @@ class MapVisualiser:
         ax.set_ylabel('Y', fontsize=12)
         
         plt.tight_layout()
+        plt.close(fig)  # Close to prevent auto-display and memory leaks
         print("Plot created successfully.")
         return fig
     
@@ -709,26 +730,28 @@ class MapVisualiser:
             xlabel="Longitude",
             ylabel="Latitude"
         )
-        
         print("Interactive map created successfully.")
         return plot
 
-    def plot_plottable_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], tiles='OSM', alpha=0.7, frame_width=300, frame_height=250):
+    def plot_plottable_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], tiles='OSM', alpha=0.7):
         """
         Plots all plottable data variables in a grid layout using hvplot.
         
         Args:
-            cmap (str or list): The colormap to use for plotting.
+            cmap (str or list): The colormap to use for plotting. Can be a matplotlib colormap name
+                                or a list of hex colors that will be converted to a ListedColormap.
             tiles (str): The map tile provider (e.g., 'OSM', 'EsriImagery').
             alpha (float): The transparency of the overlay (0.0 to 1.0).
-            frame_width (int): Width of each subplot in pixels.
-            frame_height (int): Height of each subplot in pixels.
         
         Returns:
             holoviews.core.layout.Layout: The grid layout of maps.
         """
         if not self.plottable_data:
             raise RuntimeError("No plottable data available. Run prepare_for_map_overlay_all_vars() first.")
+        
+        # Convert color list to ListedColormap if needed
+        if isinstance(cmap, list):
+            cmap = ListedColormap(cmap)
         
         # Limit to first 16 variables
         if variables is None:   
@@ -738,14 +761,10 @@ class MapVisualiser:
         n_vars = len(variables)
         
         # Calculate grid dimensions
-        if n_vars <= 4:
-            n_rows, n_cols = 2, 2
-        elif n_vars <= 9:
-            n_rows, n_cols = 3, 3
-        else:
-            n_rows, n_cols = 4, 4
+        n_rows, n_cols = self.__getGridDimensions__(n_vars)
+        figzise = (5 * n_cols, 5* n_rows)
 
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(frame_height, frame_width), sharex=True, sharey=True)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figzise, sharex=True, sharey=True)
         axes = axes.flatten() if n_vars > 1 else [axes]
         
         print(f"Plotting {n_vars} refined variables in a {n_rows}x{n_cols} grid...")
@@ -767,25 +786,25 @@ class MapVisualiser:
             axes[idx].axis('off')
         
         plt.tight_layout()
+        plt.close(fig)  # Close to prevent auto-display and memory leaks
         print("Grid plot created successfully.")
         return fig
     
-    def plot_polygons_grid(self, color="darkred", alpha=0.7, figzise=(20, 20), edge_color="black", linewidth=0.5):
+    def plot_polygons_grid(self, variables:list=None, color="darkred", alpha=0.7, edge_color="black", linewidth=0.5):
         """
         Plots all polygon data in a grid layout using hvplot.
         """
         if not self.polygons_data:
             raise RuntimeError("No polygon data available. Run build_polygons_all_vars() first.")
         
-        variables = list(self.polygons_data.keys())[:16]
+        if variables is None:
+            variables = list(self.polygons_data.keys())[:16]
+        else:
+            variables = [var for var in variables if var in self.polygons_data][:16]
         n_vars = len(variables)
         
-        if n_vars <= 4:
-            n_rows, n_cols = 2, 2
-        elif n_vars <= 9:
-            n_rows, n_cols = 3, 3
-        else:
-            n_rows, n_cols = 4, 4
+        n_rows, n_cols = self.__getGridDimensions__(n_vars)
+        figzise = (5 * n_cols, 5* n_rows)
         
         print(f"Creating polygon map grid for {n_vars} variables in a {n_rows}x{n_cols} layout...")
 
@@ -838,6 +857,9 @@ class MapVisualiser:
             date = self.dc.time.isel(time=0).dt.strftime('%Y-%m-%d').item()
             title = f"'{variable_name}' on {date}"
 
+        # Extract bounding box limits
+        min_lon, min_lat, max_lon, max_lat = self.bounding_box
+
         flood_map = self.plottable_data[variable_name].hvplot.image(
             x='x', y='y',
             geo=True,
@@ -849,7 +871,9 @@ class MapVisualiser:
             title=title,
             xlabel="Longitude",
             ylabel="Latitude",
-            colorbar=False
+            colorbar=False,
+            xlim=(min_lon, max_lon),
+            ylim=(min_lat, max_lat)
         )
         return flood_map
     
@@ -885,6 +909,9 @@ class MapVisualiser:
             print(f"Warning: No polygons to plot for '{variable_name}'")
             return None
         
+        # Extract bounding box limits
+        min_lon, min_lat, max_lon, max_lat = self.bounding_box
+        
         polygon_map = gdf.hvplot.polygons(
             geo=True,
             tiles=tiles,
@@ -894,7 +921,9 @@ class MapVisualiser:
             frame_height=frame_height,
             title=title,
             hover_cols=[],
-            legend=False
+            legend=False,
+            xlim=(min_lon, max_lon),
+            ylim=(min_lat, max_lat)
         )
         
         return polygon_map

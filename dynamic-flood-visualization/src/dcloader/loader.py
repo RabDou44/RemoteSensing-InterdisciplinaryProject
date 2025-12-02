@@ -94,7 +94,7 @@ class DcLoader:
             if self.time_range is not None:
                 self.dc.attrs['time_range'] = self.time_range
             if self.crs is not None:
-                self.dc.attrs['crs'] = self.crs
+                self.dc.attrs['crs'] = self.crs.to_string()
             if self.resolution is not None:
                 self.dc.attrs['resolution'] = self.resolution
 
@@ -174,7 +174,7 @@ class DcLoader:
             'dimensions': dict(self.dc.dims) if self.dc is not None else None
         }
 
-    def save_to_netcdf(self, output_path, compute=False):
+    def save_to_netcdf(self, output_path):
         """
         Saves the current data cube to a NetCDF file.
 
@@ -189,15 +189,11 @@ class DcLoader:
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        if compute:
-            print("Computing data before saving...")
-            dc_computed = self.dc.compute()
-            dc_computed.to_netcdf(output_path)
-            print(f"Data saved to {output_path}")
-        else:
-            print("Saving with netcdf4 engine...")
-            self.dc.to_netcdf(output_path, engine='netcdf4')
-            print(f"Data saved to {output_path}")
+        print("Computing data before saving...")
+        dc_computed = self.dc.compute()
+        dc_computed.to_netcdf(output_path, engine="netcdf4")
+        print(f"Data cube saved to {output_path}")
+
 
     def load_from_netcdf(self, input_path, lazy=False):
         """
@@ -226,7 +222,7 @@ class DcLoader:
             self.time_range = self.dc.attrs['time_range']
         
         if 'crs' in self.dc.attrs:
-            self.crs = self.dc.attrs['crs']
+            self.crs = pyproj.CRS.from_string(self.dc.attrs['crs'])
         elif 'spatial_ref' in self.dc.coords:
             try:
                 self.crs = self.dc.coords['spatial_ref'].attrs.get('crs_wkt', None)
