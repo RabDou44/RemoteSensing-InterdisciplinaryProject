@@ -213,3 +213,10 @@ Jonas: Survey setup, google forms
 Jakob: Discusses with Adam the polygons 
 Adam: Polygons with binning and scales
 
+Survey, three options always, great danger, medium danger and no danger
+                              leave         evacuate others   continue as is
+Always per survey three scenarios with these danger levels, so there is no bias for the user.
+Also three locations
+and then 5 map types
+=> 45 is to much for one user
+

@@ -4,6 +4,7 @@ import pyproj
 from dask.distributed import wait
 from odc import stac as odc_stac
 import xarray as xr
+import numpy as np
 
 
 class DcLoader:
@@ -239,4 +240,137 @@ class DcLoader:
         print(f"  - Resolution: {self.resolution}")
         
         return self.dc
+    
+    def compute_swath_mosaic(
+        self,
+        flood_variables=None,
+        fill_value=255,
+        mask_var="reference_water_mask",
+        water_mask_value=1,
+        persist=True,
+        debug=False,
+        mask_variables=None,
+    ):
+        """
+        Creates a temporal swath mosaic for the supplied flood variables and updates the datacube.
+
+        Args:
+            flood_variables (list[str] | None): Variables to mosaic; defaults to vars containing
+                'flood' or 'likelihood' in their names.
+            fill_value (int): Value that marks gaps / invalid pixels.
+            mask_var (str): Name of the static water mask variable.
+            water_mask_value (int | float | None): Value within the mask to treat as water (set to
+                None to skip masking).
+            persist (bool): Whether to persist the updated Dataset on the connected Dask cluster.
+            mask_variables (list[str] | None): Mask-like variables that should also be mosaicked
+                (defaults to common mask layers if available).
+
+        Returns:
+            xarray.Dataset: Updated dataset with mosaicked flood variables.
+        """
+        if self.dc is None:
+            raise RuntimeError("Data has not been loaded yet. Call load_GFM_data() first.")
+
+        if flood_variables is None:
+            flood_variables = [
+                var
+                for var in self.dc.data_vars
+                if any(keyword in var.lower() for keyword in ("flood", "likelihood"))
+            ]
+
+        if not flood_variables:
+            raise ValueError("No flood variables provided or detected for swath mosaicking.")
+
+        mask_variables = list(mask_variables or [])
+        if mask_var and mask_var not in mask_variables:
+            mask_variables.append(mask_var)
+        mask_variables = [var for var in mask_variables if var in self.dc.data_vars]
+
+        target_variables = []
+        for candidate in flood_variables + [v for v in mask_variables if v not in flood_variables]:
+            if candidate not in target_variables:
+                target_variables.append(candidate)
+
+        static_mask = None
+        if water_mask_value is not None and mask_var in self.dc.data_vars:
+            mask_da = self.dc[mask_var]
+            if "time" in mask_da.dims:
+                mask_da = mask_da.isel(time=0)
+            static_mask = (mask_da == water_mask_value).load()
+
+        updated_vars = []
+        for var in target_variables:
+            if var not in self.dc.data_vars:
+                print(f"Skipping '{var}' (not present in dataset).")
+                continue
+
+            data_array = self.dc[var]
+            if "time" not in data_array.dims:
+                print(f"Skipping '{var}' (no time dimension).")
+                continue
+
+            var_fill_value = data_array.attrs.get("_FillValue", fill_value)
+            if var_fill_value is None:
+                var_fill_value = fill_value
+
+            is_mask_variable = var in mask_variables
+            working_da = data_array.astype(np.int32)
+            working_da.name = var
+            if static_mask is not None and not is_mask_variable:
+                working_da = working_da.where(~static_mask, other=var_fill_value)
+
+            mosaic = self._temporal_swath_mosaic(working_da, fill_value=var_fill_value, debug=debug)
+            mosaic = mosaic.astype(data_array.dtype)
+
+            repeated_slices = [mosaic.copy(deep=True) for _ in range(data_array.sizes["time"])]
+            repeated = xr.concat(repeated_slices, dim="time")
+            repeated = repeated.assign_coords(time=data_array.coords["time"])
+            repeated = repeated.transpose(*data_array.dims)
+            repeated.attrs = data_array.attrs
+
+            data_chunks = getattr(data_array, "chunks", None)
+            if data_chunks is not None:
+                chunk_map = {dim: chunks for dim, chunks in zip(data_array.dims, data_chunks)}
+                repeated = repeated.chunk(chunk_map)
+
+            self.dc[var] = repeated
+            updated_vars.append(var)
+
+        if persist:
+            self.dc = self.dc.persist()
+
+        print(f"Swath mosaic applied to {len(updated_vars)} variable(s).")
+        return self.dc
+
+    @staticmethod
+    def _temporal_swath_mosaic(data_band: xr.DataArray, fill_value: int | float, debug: bool = False) -> xr.DataArray:
+        """
+        Performs first-valid-pixel compositing over time for a single variable.
+        """
+        if data_band.sizes.get("time", 0) == 0:
+            raise ValueError("No data found in the time series for mosaicking.")
+
+        base_slice = data_band.isel(time=0).copy(deep=True).load()
+        base_array = base_slice.values
+        missing_mask = (base_array == fill_value) | np.isnan(base_array)
+
+        for t_index in range(1, data_band.sizes["time"]):
+            if not missing_mask.any():
+                break
+            fill_slice = data_band.isel(time=t_index).load()
+            fill_array = fill_slice.values
+            valid_fill = (fill_array != fill_value) & (~np.isnan(fill_array))
+            fill_candidates = missing_mask & valid_fill
+            pixels_filled = np.count_nonzero(fill_candidates)
+            if pixels_filled:
+                if debug:
+                    print(
+                        f"[Swath Mosaic] var='{getattr(data_band, 'name', 'unknown')}' "
+                        f"time_idx={t_index} filled {pixels_filled} pixels using swath from time index {t_index}."
+                    )
+                base_array[fill_candidates] = fill_array[fill_candidates]
+                missing_mask[fill_candidates] = False
+
+        base_slice.values = base_array
+        return base_slice
 
