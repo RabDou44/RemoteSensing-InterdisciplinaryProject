@@ -375,10 +375,6 @@ class MapVisualiser:
             raise RuntimeError(f"Variable '{variable_name}' not found in plottable_data. "
                              f"Run prepare_for_map_overlay('{variable_name}') first.")
         
-        if variable_name in self.polygons_data:
-            print(f"Polygons for '{variable_name}' already exist. Returning existing polygons.")
-            return self.polygons_data[variable_name]
-        
         print(f"Building polygons for '{variable_name}'...")
         
         # Get the plottable data
@@ -387,15 +383,13 @@ class MapVisualiser:
         # Create binary mask for flood extent
         mask = (variable_mat > threshold)
         
-        # Convert raster to vector polygons
         shapes_gen = features.shapes(
             mask.astype(np.uint8).values,
             mask=~np.isnan(variable_mat.values),
             transform=variable_mat.rio.transform()
         )
 
-        # Extract only polygons where mask > 0
-        polygons = [shape(geom) for geom, val in shapes_gen if val > threshold]
+        polygons = [shape(geom) for geom, val in shapes_gen if val > 0 ]
         
         if not polygons:
             print(f"Warning: No flood polygons found for '{variable_name}'")
@@ -599,6 +593,53 @@ class MapVisualiser:
         
         return result
     
+    def apply_binning(self, variable:str, binning: List = [50, 100], new_name:str = None, save_to_plottable: bool = False) -> xr.DataArray:
+        """
+        Applies binning to a plottable data variable. Binning is defined as operation which basically the ceilling operation 
+        on value unless there's higher bin defined. For example, with binning=[67, 76, 90], values will be binned as follows:
+            - Values < 67 become 0
+            - Values >= 67 and < 76 become 1
+            - Values >= 76 and < 90 become 2
+            - Values >= 90 become 3
+
+        Args:
+            variable (str): The name of the plottable data variable to bin.
+            binning (List): List of binning values.
+            new_name (str, optional): Name for the resulting binned DataArray.
+                                      Defaults to variable name with '_binned' suffix.
+        
+        Returns:
+            xr.DataArray: Binned DataArray.
+        """
+        if variable not in self.plottable_data:
+            raise RuntimeError(f"Variable '{variable}' not found in plottable_data. "
+                               f"Run prepare_for_map_overlay('{variable}') first.")
+        
+        if not self.is_proper_binning(binning):
+            raise ValueError("Binning list must be strictly increasing.")
+
+        if new_name is None:
+            new_name = f"{variable}_binned"
+        
+        data_array = self.plottable_data[variable]
+        data_array = data_array.fillna(-1)
+        binned_da = np.digitize(data_array.values, bins=binning, right=False)
+        binned_da = binned_da - np.ones_like(binned_da)
+        binned_da = np.where(data_array.values == -1, np.nan, binned_da)
+
+        if save_to_plottable:
+            self.plottable_data[new_name] = xr.DataArray(binned_da, coords=data_array.coords, dims=data_array.dims, name=new_name)
+        return xr.DataArray(binned_da, coords=data_array.coords, dims=data_array.dims, name=new_name)
+
+    @staticmethod
+    def get_bin(data_array:np.ndarray, bin_value):
+        return np.where(data_array >= bin_value, bin_value, np.Nan)
+    
+    @staticmethod
+    def is_proper_binning(binning:List) -> bool:
+        """Checks if binning list is strictly increasing."""
+        return all(earlier < later for earlier, later in zip(binning, binning[1:]))
+     
     @staticmethod
     def __getGridDimensions__(n_vars: int) -> typing.Tuple[int, int]:
         """Calculates optimal grid dimensions for plotting n_vars subplots."""
@@ -832,6 +873,7 @@ class MapVisualiser:
             axes[idx].axis('off') 
         
         plt.tight_layout()
+        plt.close(fig)  # Close to prevent auto-display and memory leaks
         print("Polygon grid plot created successfully.")
         return fig
     
@@ -927,6 +969,18 @@ class MapVisualiser:
         )
         
         return polygon_map
+
+    def run(self):
+        """
+        creates all combinations of colors vs variables vs technique
+        technique = {product (flood_extent x likelihood), binning-product, polygon, polygon-binning-product}
+        
+        Keyword arguments:
+        argument -- description
+        Return: return_description
+        """
+        pass
+        
 
     def save_to_file(self, filepath: str, compress: bool = True):
         """
