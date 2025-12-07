@@ -741,7 +741,7 @@ class MapVisualiser:
         print("Plot created successfully.")
         return fig
     
-    def plot_plottable_data(self, variable_name: str, cmap=COLOR_PALETTES['light_to_strong_blue']): 
+    def plot_plottable_data(self, variable_name: str, cmap=COLOR_PALETTES['light_to_strong_blue'], title:str=None): 
         """
         Plots a single plottable data variable using hvplot.
         
@@ -766,7 +766,7 @@ class MapVisualiser:
             alpha=0.7,
             frame_width=600,
             frame_height=400,
-            title=variable_name,
+            title=title,
             colorbar=True,
             xlabel="Longitude",
             ylabel="Latitude"
@@ -913,7 +913,7 @@ class MapVisualiser:
             title=title,
             xlabel="Longitude",
             ylabel="Latitude",
-            colorbar=False,
+            colorbar=True,
             xlim=(min_lon, max_lon),
             ylim=(min_lat, max_lat)
         )
