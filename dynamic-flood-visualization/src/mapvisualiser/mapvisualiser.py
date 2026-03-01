@@ -26,6 +26,12 @@ from datetime import datetime
 import re
 from color_schemes import COLOR_PALETTES
 import pyproj
+import gc
+try:
+    import contextily as ctx
+    HAS_CONTEXTILY = True
+except ImportError:
+    HAS_CONTEXTILY = False
 class MapVisualiser:
     
     PossibleModels = {"dlr","lst","tuw","ensemble"}
@@ -649,16 +655,115 @@ class MapVisualiser:
             n_cols = int(np.ceil(np.sqrt(n_vars)))
             n_rows = int(np.ceil(n_vars / n_cols))
             return n_rows, n_cols
+    
+    @staticmethod
+    def cleanup_memory():
+        """Force garbage collection and clear matplotlib cache to free memory."""
+        plt.close('all')  # Close all matplotlib figures
+        gc.collect()  # Force garbage collection
+        print("Memory cleanup completed.")
 
-    def plot_refined_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue']):
+    def plot_raw_data_grid(self, variables:list=None, time_index: int = 0,
+                           cmap=COLOR_PALETTES['light_to_strong_blue'],
+                           downsample_factor: int = 1, dpi: int = 100):
+        """
+        Plots raw variables from the datacube (self.dc) in a grid layout using matplotlib.
+
+        Args:
+            variables (list): Variables to plot. Defaults to first 16 plottable raw vars.
+            time_index (int): Time index to visualize for variables with a 'time' dimension.
+            cmap (str or list): The colormap to use for plotting.
+            downsample_factor (int): Sample every nth pixel (1=no downsampling, 4=1/4 resolution).
+            dpi (int): DPI for rendering.
+
+        Returns:
+            matplotlib.figure.Figure: The generated figure.
+        """
+        if self.dc is None or not self.dc.data_vars:
+            raise RuntimeError("No datacube data available in self.dc.")
+
+        if downsample_factor < 1:
+            raise ValueError("downsample_factor must be >= 1")
+
+        if isinstance(cmap, list):
+            cmap = ListedColormap(cmap)
+
+        available_vars = list(self.dc.data_vars.keys())
+        if variables is None:
+            requested_vars = available_vars[:16]
+        else:
+            requested_vars = [var for var in variables if var in self.dc.data_vars][:16]
+
+        valid_vars = []
+        skipped_vars = []
+        for var_name in requested_vars:
+            data = self.dc[var_name]
+            plot_data = data.isel(time=time_index) if 'time' in data.dims else data
+            if 'x' in plot_data.dims and 'y' in plot_data.dims:
+                valid_vars.append(var_name)
+            else:
+                skipped_vars.append(var_name)
+
+        if not valid_vars:
+            raise RuntimeError(
+                "No valid 2D raw variables found to plot. Variables must include x/y dims "
+                "(optionally with time)."
+            )
+
+        n_vars = len(valid_vars)
+        n_rows, n_cols = self.__getGridDimensions__(n_vars)
+        figsize = (5 * n_cols, 5 * n_rows)
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True, dpi=dpi)
+        axes = axes.flatten() if n_vars > 1 else [axes]
+
+        print(f"Plotting {n_vars} raw datacube variables in a {n_rows}x{n_cols} grid...")
+        if downsample_factor > 1:
+            print(f"  Downsampling by factor {downsample_factor} for faster rendering...")
+        if skipped_vars:
+            print(f"  Skipped non-2D variables: {skipped_vars}")
+
+        for idx, var_name in enumerate(valid_vars):
+            ax = axes[idx]
+            data = self.dc[var_name]
+            data = data.isel(time=time_index) if 'time' in data.dims else data
+
+            if downsample_factor > 1:
+                data = data.isel(
+                    x=slice(None, None, downsample_factor),
+                    y=slice(None, None, downsample_factor)
+                )
+
+            data.plot(
+                ax=ax,
+                cmap=cmap,
+                add_colorbar=True,
+                cbar_kwargs={'shrink': 0.8},
+                rasterized=True
+            )
+            ax.set_title(var_name, fontsize=10, fontweight='bold')
+            ax.set_xlabel('X', fontsize=8)
+            ax.set_ylabel('Y', fontsize=8)
+
+        for idx in range(n_vars, len(axes)):
+            axes[idx].axis('off')
+
+        plt.tight_layout()
+        plt.close(fig)
+        print("Raw datacube grid plot created successfully.")
+        return fig
+
+    def plot_refined_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], 
+                               downsample_factor: int = 1, dpi: int = 100):
         """
         Plots all refined data variables in a grid layout using matplotlib.
         
         Args:
-            cmap (str or list): The colormap to use for plotting. Can be a matplotlib colormap name
-                                or a list of hex colors that will be converted to a ListedColormap.
-            figsize (tuple): The figure size (width, height).
-            sample_rate (int): Sample every nth pixel for faster plotting.
+            variables (list): Variables to plot. Defaults to first 16.
+            cmap (str or list): The colormap to use for plotting.
+            downsample_factor (int): Sample every nth pixel (1=no downsampling, 4=1/4 resolution). 
+                                     Default: 1. Use 2-4 for faster rendering on large arrays.
+            dpi (int): DPI for rendering (default: 100). Reduce to 75 for faster rendering.
         
         Returns:
             matplotlib.figure.Figure: The generated figure.
@@ -681,18 +786,25 @@ class MapVisualiser:
         n_rows, n_cols = self.__getGridDimensions__(n_vars)
         figsize = (5* n_cols, 5 * n_rows)
         
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True, dpi=dpi)
         axes = axes.flatten() if n_vars > 1 else [axes]
         
         print(f"Plotting {n_vars} refined variables in a {n_rows}x{n_cols} grid...")
+        if downsample_factor > 1:
+            print(f"  Downsampling by factor {downsample_factor} for faster rendering...")
         
         for idx, var_name in enumerate(variables):
             ax = axes[idx]
             
-            # Sample data for faster plotting
-            data = self.refined_data[var_name]            
-            # Plot
-            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, cbar_kwargs={'shrink': 0.8})
+            # Downsample data for faster plotting if requested
+            data = self.refined_data[var_name]
+            if downsample_factor > 1:
+                data = data.isel(x=slice(None, None, downsample_factor), 
+                                y=slice(None, None, downsample_factor))
+            
+            # Plot with rasterized option for faster rendering
+            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, 
+                          cbar_kwargs={'shrink': 0.8}, rasterized=True)
             ax.set_title(var_name, fontsize=10, fontweight='bold')
             ax.set_xlabel('X', fontsize=8)
             ax.set_ylabel('Y', fontsize=8)
@@ -706,14 +818,17 @@ class MapVisualiser:
         print("Grid plot created successfully.")
         return fig
 
-    def plot_refined_data(self, variable_name: str, cmap=COLOR_PALETTES['light_to_strong_blue']):
+    def plot_refined_data(self, variable_name: str, cmap=COLOR_PALETTES['light_to_strong_blue'],
+                         downsample_factor: int = 1, dpi: int = 100):
         """
         Plots a single refined data variable using matplotlib.
         
         Args:
             variable_name (str): The name of the variable to plot.
-            cmap (str or list): The colormap to use for plotting. Can be a matplotlib colormap name
-                                or a list of hex colors that will be converted to a ListedColormap.
+            cmap (str or list): The colormap to use for plotting.
+            downsample_factor (int): Sample every nth pixel (1=no downsampling, 4=1/4 resolution).
+                                     Default: 1. Use 2-4 for faster rendering on large arrays.
+            dpi (int): DPI for rendering (default: 100). Reduce to 75 for faster rendering.
         
         Returns:
             matplotlib.figure.Figure: The generated figure.
@@ -727,11 +842,19 @@ class MapVisualiser:
             cmap = ListedColormap(cmap)
         
         print(f"Plotting refined variable '{variable_name}'...")
+        if downsample_factor > 1:
+            print(f"  Downsampling by factor {downsample_factor} for faster rendering...")
         
-        fig, ax = plt.subplots(figsize=(8, 6))
-        im = self.refined_data[variable_name].plot(
-            ax=ax, cmap=cmap, add_colorbar=True
-        )
+        fig, ax = plt.subplots(figsize=(8, 6), dpi=dpi)
+        
+        # Downsample data for faster plotting if requested
+        data = self.refined_data[variable_name]
+        if downsample_factor > 1:
+            data = data.isel(x=slice(None, None, downsample_factor),
+                           y=slice(None, None, downsample_factor))
+        
+        # Plot with rasterized option for faster rendering
+        im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, rasterized=True)
         ax.set_title(variable_name, fontsize=14, fontweight='bold')
         ax.set_xlabel('X', fontsize=12)
         ax.set_ylabel('Y', fontsize=12)
@@ -774,18 +897,19 @@ class MapVisualiser:
         print("Interactive map created successfully.")
         return plot
 
-    def plot_plottable_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], tiles='OSM', alpha=0.7):
+    def plot_plottable_data_grid(self, variables:list=None, cmap=COLOR_PALETTES['light_to_strong_blue'], 
+                                  downsample_factor: int = 1, dpi: int = 100):
         """
-        Plots all plottable data variables in a grid layout using hvplot.
+        Plots all plottable data variables in a grid layout using matplotlib.
         
         Args:
-            cmap (str or list): The colormap to use for plotting. Can be a matplotlib colormap name
-                                or a list of hex colors that will be converted to a ListedColormap.
-            tiles (str): The map tile provider (e.g., 'OSM', 'EsriImagery').
-            alpha (float): The transparency of the overlay (0.0 to 1.0).
+            variables (list): Variables to plot. Defaults to first 16.
+            cmap (str or list): The colormap to use for plotting.
+            downsample_factor (int): Sample every nth pixel (1=no downsampling, 4=1/4 resolution).
+            dpi (int): DPI for rendering (default: 100).
         
         Returns:
-            holoviews.core.layout.Layout: The grid layout of maps.
+            matplotlib.figure.Figure: The generated figure.
         """
         if not self.plottable_data:
             raise RuntimeError("No plottable data available. Run prepare_for_map_overlay_all_vars() first.")
@@ -803,24 +927,30 @@ class MapVisualiser:
         
         # Calculate grid dimensions
         n_rows, n_cols = self.__getGridDimensions__(n_vars)
-        figzise = (5 * n_cols, 5* n_rows)
+        figsize = (5 * n_cols, 5 * n_rows)
 
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=figzise, sharex=True, sharey=True)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, sharex=True, sharey=True, dpi=dpi)
         axes = axes.flatten() if n_vars > 1 else [axes]
         
-        print(f"Plotting {n_vars} refined variables in a {n_rows}x{n_cols} grid...")
+        print(f"Plotting {n_vars} plottable variables in a {n_rows}x{n_cols} grid...")
+        if downsample_factor > 1:
+            print(f"  Downsampling by factor {downsample_factor} for faster rendering...")
        
         for idx, var_name in enumerate(variables):
             ax = axes[idx]
             
-            # Sample data for faster plotting
+            # Downsample data for faster plotting
             data = self.plottable_data[var_name]
+            if downsample_factor > 1:
+                data = data.isel(x=slice(None, None, downsample_factor),
+                                y=slice(None, None, downsample_factor))
             
-            # Plot
-            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, cbar_kwargs={'shrink': 0.8})
+            # Plot with rasterization
+            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, 
+                          cbar_kwargs={'shrink': 0.8}, rasterized=True)
             ax.set_title(var_name, fontsize=10, fontweight='bold')
-            ax.set_xlabel('X', fontsize=8)
-            ax.set_ylabel('Y', fontsize=8)
+            ax.set_xlabel('Longitude', fontsize=8)
+            ax.set_ylabel('Latitude', fontsize=8)
         
         # Hide unused subplots
         for idx in range(n_vars, len(axes)):
@@ -902,12 +1032,14 @@ class MapVisualiser:
         # Extract bounding box limits
         min_lon, min_lat, max_lon, max_lat = self.bounding_box
 
+        # Key fix: Don't pass alpha to hvplot.image() directly - it makes entire layer transparent
+        # Instead, render data layer with full opacity so colors are visible
+        # NaN values stay transparent naturally
         flood_map = self.plottable_data[variable_name].hvplot.image(
             x='x', y='y',
             geo=True,
             tiles=tiles,
             cmap=cmap,
-            alpha=alpha,
             frame_width=800,
             frame_height=600,
             title=title,
@@ -915,7 +1047,8 @@ class MapVisualiser:
             ylabel="Latitude",
             colorbar=True,
             xlim=(min_lon, max_lon),
-            ylim=(min_lat, max_lat)
+            ylim=(min_lat, max_lat),
+            alpha=0.9  # Higher alpha to ensure visibility
         )
         return flood_map
     
