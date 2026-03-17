@@ -19,6 +19,7 @@ COLOR_PALETTES = {
     
     # White-to-blue monochromatic scheme
     'white_to_blue': ['#ffffff', '#f0f9ff', '#bae6fd', '#7dd3fc', '#38bdf8', '#0ea5e9', '#0284c7', '#075985'],
+    'white_to_blue5': ['#ffffff', '#bae6fd', '#38bdf8', '#0952cd', '#08306b'],
     
     # Viridis-inspired scheme
     'purple_to_yellow': ['#440154', '#482777', '#3f4a8a', '#31678e', '#26838f', '#1f9d8a', '#6cce5a', '#b6de2b', '#fee825'],
@@ -39,9 +40,56 @@ COLOR_PALETTES = {
     # Light blue to strong blue gradient
     'light_to_strong_blue': [
         '#c8e6ff', '#bee1ff', '#b4ddff', '#aad8ff', '#a0d4ff', '#96cfff', '#8ccbff', '#82c6ff',
-        '#78c2ff', '#6ebdff', '#64b9ff', '#5ab4ff', '#50b0ff', '#46abff', '#3ca7ff', '#1e90ff',
-        '#1e90ff', '#1e90ff', '#1e90ff', '#1e90ff'
+        '#78c2ff', '#6ebdff', '#64b9ff', '#5ab4ff', '#50b0ff', '#46abff', '#3ca7ff', '#1e90ff'
     ],
+    'light_to_strong_blue2':['#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#c8e6ff',
+                '#bee1ff',
+                '#b4ddff',
+                '#aad8ff',
+                '#a0d4ff',
+                '#96cfff',
+                '#8ccbff',
+                '#82c6ff',
+                '#78c2ff',
+                '#6ebdff',
+                '#64b9ff',
+                '#5ab4ff',
+                '#50b0ff',
+                '#46abff',
+                '#3ca7ff',
+                '#1e90ff',
+                '#2974ff',
+                '#1963fe',
+                '#0952cd',
+                '#08419c',
+                '#08306b']
 
 }
 

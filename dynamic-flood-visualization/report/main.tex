@@ -9,6 +9,8 @@
 \usepackage{titlesec}
 \usepackage{booktabs}
 \usepackage{caption}
+\usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{subcaption}
 
 \title{Techniques for Dynamic Visualization of Time-Varying Flood Data}
@@ -109,87 +111,249 @@ During pre-processing, a pixel was only classified as a valid flooded area if th
 \label{subsec:model_comparison}
 To provide a thorough foundation for the visualization techniques, an initial comparison of the four retrieved model types (\texttt{tuw}, \texttt{dlr}, \texttt{lst}, and \texttt{ensemble}) was conducted. Because each model uses slightly different algorithms and radar interpretations to classify water, their resulting likelihoods and extents vary. Understanding these differences is vital before deciding which base data should be simplified for the general public.
 
+The Copernicus Global Flood Monitoring (GFM) dataset derives these models using distinct algorithmic strategies \cite{Wagner2026}:
+\begin{itemize}
+    \item \textbf{DLR (Single-image classifier):} Uses an unsupervised thresholding procedure on a single SAR image to estimate the \textit{total water extent}, encompassing flooded areas alongside permanent and seasonal water bodies.
+    \item \textbf{LST (Dual-image classifier):} Compares the incoming flood image with a recent reference image from the exact same satellite orbit to detect backscatter changes, primarily targeting \textit{recently flooded areas}.
+    \item \textbf{TUW (Time-series classifier):} Utilizes a harmonic backscatter model trained on historic observations and Bayesian inference to extract the \textit{flood area compared to a long-term seasonal mean}.
+    \item \textbf{Ensemble:} Merges the results of the three independent algorithms at the pixel level. It determines the binary flood extent via a decision-tree-based majority vote and calculates the flood likelihood as the arithmetic mean of the individual likelihoods, maximizing overall robustness.
+\end{itemize}
+
+It was decided to use the \texttt{ensemble} model for the final visualizations, as it provides a more balanced and comprehensive representation of flood risk by integrating multiple algorithmic perspectives. For each point on the map Flood Extent is defined as a binary classification of whether the area is flooded or not, while Flood Likelihood is a continuous value between 0 and 100 representing the confidence level of flooding at that location.
 \begin{figure}[H]
     \centering
-    % \includegraphics[width=\linewidth]{img/model_comparison.png}
-    \caption{Placeholder: A side-by-side comparison of the raw flood extent and likelihood outputs from the tuw, dlr, lst, and ensemble models for the Pakistan 2022 case study.}
-    \label{fig:model_comparison}
+    \includegraphics[width=\linewidth]{img/baseline_ensemble.png}
+    \caption{Baseline visualization of flood extent (left) and likelihood (right) based on Ensemble method}
+    \label{fig:ensemble_baseline}
 \end{figure}
 
+\subsection{Visualizations} 
+\label{subsec:visualizations}
 
+%% Baseline CEMS
+To compare interpretability among laypersons, several visualization techniques were implemented. 
+As a baseline, the raw raster Flood Extent data was plotted directly (see Figure \ref{fig:ensemble_baseline}). This approach, while straightforward, resulted in a highly fragmented and noisy visual representation that was difficult for non-experts to interpret. 
 
-\subsection{Visualizations}
-To compare interpretability among laypersons, several visualization techniques were implemented.
+The pixel-level granularity obscured broader spatial patterns, making it challenging to identify contiguous flooded areas or understand the overall risk landscape.
+Using Likelihood values instead of binary Extent classifications would provided more information but would not significantly improve interpretability due to the continuous nature of the data and lack of clear visual cues for risk levels.
 
-\begin{enumerate}
-    \item \textbf{Baseline (CEMS)}: The default visualization directly plotting raw raster likelihood data.
-    \item \textbf{Baseline with Map}: The default visualization overlaid onto a geographic basemap to provide essential spatial context.
-    \item \textbf{Polygon (Simplified)}: Smoothing the underlying flood-likelihood raster values into larger, contiguous polygon areas to reduce visual fragmentation and make spatial trends instantly recognizable.
-    \item \textbf{Mixed Method}: Combining polygon smoothing with original flood extent raster information, serving as a middle ground between highly smoothed patterns and detailed raster views.
-    \item \textbf{Binning-based}: Grouping flood likelihood into discrete categorical risk bins (e.g., Low, Medium, High) with distinct visual encodings, simplifying the continuous value space.
-\end{enumerate}
-
-% --- FIGURE PLACEHOLDERS ---
 \begin{figure}[H]
     \centering
-    % \includegraphics[width=0.8\linewidth]{img/pakistan_baseline_map.png}
-    \caption{Placeholder: Baseline visualization overlaid on a background map.}
-    \label{fig:baseline_map}
+    \includegraphics[width=0.8\linewidth]{img/ensemble_flood_extent_on_map.png}
+    \caption{ Baseline Flood visualisation with map}
+    \label{fig:baseline_with_map}
 \end{figure}
 
-\begin{figure}[H]
-    \centering
-    % \includegraphics[width=0.8\linewidth]{img/pakistan_polygon.png}
-    \caption{Placeholder: Flood likelihood smoothed with polygons.}
-    \label{fig:polygon}
-\end{figure}
+%% Baseline with map
+In next approach Flood Extent was visualised on map adding spatial context (see Figure \ref{fig:baseline_with_map}). This provided a clearer picture of where flooding was occurring in relation to recognizable geographic features, making it easier for users to understand the spatial distribution of flood risk. 
+However, the underlying fragmentation of the data still posed challenges for quickly grasping the overall situation. In this variant risk levels were not visually encoded, so users had to mentally interpret the binary flooded/not-flooded classification without any indication of confidence or severity.
+
+%% Polygon simplified
+In the next approach, polygon-based visualizations were introduced to smooth the underlying flood extent values (see Figure \ref{fig:ensemble_flood_extent_polygon_map}). Rather than displaying pixel-level variation, 
+the data was aggregated into larger, contiguous polygon regions. The polygons were intentionally generated to be broader and more connected, yielding a smaller number of distinct areas that could be interpreted quickly 
+and easily. This smoothing reduces visual fragmentation, creates more uniform spatial structures, and makes overall patterns easier to recognize. The more
+clearly defined polygon boundaries also support a better visual estimation of the extent of flooded areas.
 
 \begin{figure}[H]
     \centering
-    % \includegraphics[width=0.8\linewidth]{img/pakistan_binned.png}
-    \caption{Placeholder: Binned flood likelihood representing discrete risk categories.}
+    \includegraphics[width=0.8\linewidth]{img/ensemble_flood_extent_polygon_map.png}
+    \caption{ Polygon-based visualization of flood extent overlaid on a background map.}
+    \label{fig:ensemble_flood_extent_polygon_map}
+\end{figure}
+
+%% Mixed method
+In  the next approach, we wanted to include flood extent and its severity. For this purpose the product of likelihood and flood extent was used to create a new variable called "mixed". 
+Overlayed on map this visualization provides a more comprehensive picture of the flood situation, allowing users to see not only where flooding is occurring but also how severe it is in different areas. The color intensity can be used to visually encode the combined risk level, making it easier for users to quickly identify high-risk zones.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{img/ensemble_mixed_on_map.png}
+    \caption{Mixed visualization combining flood extent and likelihood, overlaid on a background map.}
+    \label{fig:ensemble_mixed_on_map}
+\end{figure}
+
+%% Binning  method
+Although the mixed visualization contains richer information, its continuous scale remains difficult to interpret quickly for non-experts. To improve readability, a binning step is introduced so that continuous risk values are transformed into a small number of discrete severity classes. Let $x \in [0,100]$ denote the mixed value at a map pixel and let thresholds be defined as
+$$
+0 \leq v_0 < v_1 < \dots < v_n \leq 100, \qquad v_i \in \mathbb{N}.
+$$
+Then each pixel is assigned to a class index $c(x)$ by
+$$
+c(x)=
+\begin{cases}
+0, & x < v_0,\\
+b, & v_b \le x < v_{b+1}, \quad b=0,\dots,n-1,\\
+n, & x \ge v_n.
+\end{cases}
+$$
+In implementation, this is performed with threshold-based digitization (equivalent to applying an ordered bin function over all pixels), producing integer classes that are mapped to an ordered colour palette from low to high severity. The key purpose is not to remove information, but to present risk in cognitively simpler categories that support faster comparison between locations and easier communication to the general public.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[t]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{img/ensemble_mixed_binned_on_map3.png}
+        \caption{Binned mixed ensemble variable (before polygon smoothing).}
+        \label{fig:binned_raw}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\linewidth}
+        \centering
+       \includegraphics[width=\linewidth]{img/ensemble_mixed_binned_ polygon.png}
+        \caption{Binned mixed ensemble variable after polygon smoothing (placeholder).}
+        \label{fig:binned_polygon_placeholder}
+    \end{subfigure}
+    \caption{Comparison of binned flood-risk visualization before and after polygon smoothing.}
     \label{fig:binned}
 \end{figure}
 
-
-
-
+Though smoothed polygons were supposed to increase interpretability, it was observed that for large scale maps it decreases it. 
+On the other hand, for smaller scale maps (like the one of Larcana city; see Figure \ref{fig:larcana_binned_polygon}) the polygon smoothing remains beneficial as it reduces visual noise and creates clearer, more cohesive areas of risk that are easier to interpret at a glance.
+\begin{figure}[H]   
+    \centering
+    \includegraphics[width=0.6\linewidth]{img/larcana_zoomed_ensemble_binned_polygon.png}
+    \caption{Area of city of Larcana with overlayed binned mixed ensemble variable after polygon smoothing.}
+    \label{fig:larcana_binned_polygon}
+\end{figure}
+    
 % ==============================
 % 4. SURVEY
 % ==============================
 \section{Survey Structure}
 \label{sec:survey}
-To evaluate the effectiveness of the developed visualizations regarding clarity, interpretability, and accessibility, an online A/B testing survey was conducted using SoSci Survey. The target audience intentionally comprised the general public to test real-world layperson comprehension. 
+The survey consisted of three parts and was conducted using SoSci Survey~\cite{SoSciSurvey}, an online platform that supports both survey design and hosting. The target was 30 completed responses, and this target was reached.
 
-The survey was divided into three sections:
+The intended audience was deliberately broad and representative of the general public. 
+To avoid bias toward expert interpretation, the participant pool was not intended to consist primarily of data science students, 
+who typically have above-average familiarity with geospatial visualizations.
+
+The survey was structured as follows:
 \begin{itemize}
-    \item \textbf{Demographics and Familiarity}: To gauge prior knowledge of geospatial maps, ensuring the sample reflects inexperienced users.
-    \item \textbf{Task and Confidence Evaluation}: Participants were shown the various visualizations in randomized order. They were asked simple navigation/safety questions (e.g., assessing the safety of a plotted point) followed by a question rating their confidence in their answer on a Likert scale. 
-    \item \textbf{Ranking}: A final review where participants ranked the visualizations from easiest to hardest to interpret via drag-and-drop.
+    \item \textbf{Part 1 --- Background and Prior Familiarity:} The first page collected basic participant information and prior exposure to the topic. 
+    This baseline helps contextualize later task performance and self-reported confidence. Participants answered the question: 
+    \emph{How familiar are you with reading flood maps or geospatial maps?} with the options \emph{Not familiar at all}, \emph{Slightly familiar}, 
+    \emph{Moderately familiar}, \emph{Very familiar}, and \emph{Expert}.
+    \item \textbf{Part 2 --- Visualization Task and Confidence:} This was the core evaluation section. 
+    Participants viewed several visualization pages, with page order randomized so no visualization benefited from always being shown first or later. 
+    On each page, participants first answered a task question and then rated how confident they were in that answer. 
+    The task question was: \emph{Based on this visualization, is it currently safe for a person entering from the south to travel to the yellow point shown on the map?} 
+    with answer options \emph{Yes}, \emph{No}, and \emph{Unsure}. The yellow point was intentionally placed so that the theoretically correct answer was \emph{No}, 
+    enabling assessment of whether participants interpreted the visualization correctly.
+    \item \textbf{Part 3 --- Final Ranking:} The final page asked participants: \emph{Which visualization was the easiest for you to read and understand?} This page was always shown at the end so that each participant had already seen all visualizations at least once. All visualization types were displayed again as references, and participants ranked them by dragging and dropping their names on a scale from \emph{easiest} (left) to \emph{hardest} (right). SoSci Survey returned values from 0 to 1000 for each visualization position, which were then converted into an ordered ranking.
 \end{itemize}
 
-Accessibility was also considered. Color schemes were validated using a Color Blindness Simulator (Coblis) to ensure distinguishability across different types of color vision deficiencies.
+An example of a task page is provided in Figure \ref{fig:survey_task_example}:
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{img/questionaire5.png}
+    \caption{Example of a survey page from Part 2, showing a visualization with the task question and confidence rating options.}
+    \label{fig:survey_task_example}
+\end{figure}
+
+Despite careful survey design, several limitations should be acknowledged. 
+First, the task question in Part 2 did not differ strongly enough across visualizations. 
+After the first few pages, participants may have anticipated the expected answer and repeated it, reducing the discriminative value of later responses. 
+Second, the survey was designed and tested on a large computer screen, while many participants likely completed it on mobile devices because distribution occurred via WhatsApp.
+This likely reduced map readability and interpretability due to smaller display size. 
+The strongest impact was in the final ranking task: on mobile, participants often had to scroll up to re-check visualization examples and then scroll down again to perform drag-and-drop ranking. 
+During this process, previously placed items could be reset unintentionally, which may have encouraged approximate ranking from memory rather than careful side-by-side comparison.
 
 % ==============================
 % 5. RESULTS & DISCUSSION 
 % ==============================
 \section{Results and Discussion}
 \label{sec:results}
-\textit{[Note to Author: Insert your own survey analysis here. Describe how the different visualizations performed regarding participant accuracy, user confidence, and final rankings based on your data. Compare the Polygon/Binned visualizations against the Baseline for the Pakistan case study.]}
+
+The results below are based on the 30 completed interviews (from 53 total responses).
+
+\subsection{Part 1: Prior Familiarity}
+Participants largely represented a non-expert audience, which matches the goal of evaluating communication quality for the general public. Most respondents reported low prior familiarity with flood maps: 63.3\% \emph{Not familiar}, 20.0\% \emph{Slightly familiar}, and 16.7\% \emph{Moderately familiar}, with no \emph{Very familiar} or \emph{Expert} responses.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\linewidth]{img/part1_familiarity_distribution.png}
+    \caption{Part 1: Self-reported familiarity with reading flood or geospatial maps (n=30 completed responses).}
+    \label{fig:part1_familiarity}
+\end{figure}
+
+\subsection{Part 2: Task Performance and Confidence}
+For the task question (``Is it currently safe to travel to the yellow point?''), the correct answer was \emph{No}. Correct-response rates were relatively close across visualizations: 56.7\% for \emph{Binned}, \emph{Baseline}, and \emph{Baseline with Map}; 50.0\% for \emph{Polygon-based}; and 46.7\% for \emph{Mixed}. Overall, these differences were small and not statistically significant.
+
+Confidence ratings (1--5 scale) were also close: \emph{Polygon-based} had the highest mean confidence (2.83), followed by \emph{Binned} and \emph{Baseline with Map} (both 2.70), while \emph{Baseline} was lowest (2.37). Again, differences were not statistically significant.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[t]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{img/part2_accuracy.png}
+        \caption{Correct-response rate by visualization.}
+        \label{fig:part2_accuracy}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{img/part2_confidence_boxplot.png}
+        \caption{Confidence distribution by visualization.}
+        \label{fig:part2_confidence}
+    \end{subfigure}
+    \caption{Part 2 results (n=30 completed responses): task accuracy and self-reported confidence.}
+    \label{fig:part2_results}
+\end{figure}
+
+\subsection{Part 3: Final Ranking}
+In the final ease-of-interpretation ranking (lower mean rank = easier), \emph{Polygon-based} and \emph{Binned} performed best (both mean rank 2.87), followed by \emph{Baseline} (2.90) and \emph{Mixed} (2.93). \emph{Baseline with Map} was ranked worst (3.43). The ranking differences were visible but not statistically significant.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\linewidth]{img/part3_mean_rank.png}
+    \caption{Part 3: Mean ease-of-reading rank by visualization (1 = easiest, 5 = hardest; n=30).}
+    \label{fig:part3_rank}
+\end{figure}
+
+\subsection{Summary of Results}
+
+Table~\ref{tab:survey_results} consolidates the three outcome measures across all five visualization types.
+
+\begin{table}[H]
+\centering
+\caption{Survey results across all five visualization types ($n = 30$). Accuracy = percentage of correct ``No'' responses; Confidence on a 1--5 scale (mean); Ease Rank: 1 = easiest, 5 = hardest (mean). Values in parentheses are 95\% CIs.}
+\label{tab:survey_results}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Visualization} & \textbf{Accuracy (\%)} & \textbf{Confidence} & \textbf{Ease Rank} \\
+\midrule
+Polygon-based       & 50.0 (32.1--67.9) & \textbf{2.83} (2.34--3.33) & \textbf{2.87} (2.30--3.43) \\
+Binned              & \textbf{56.7} (38.9--74.4) & 2.70 (2.26--3.14) & \textbf{2.87} (2.39--3.34) \\
+Baseline            & \textbf{56.7} (38.9--74.4) & 2.37 (1.85--2.89) & 2.90 (2.27--3.53) \\
+Mixed               & 46.7 (28.8--64.5) & 2.50 (2.07--2.93) & 2.93 (2.52--3.34) \\
+Baseline with Map   & \textbf{56.7} (38.9--74.4) & 2.70 (2.21--3.19) & 3.43 (3.00--3.87) \\
+\midrule
+\multicolumn{4}{@{}l}{\small Overall: Cochran's Q $p = 0.80$;\enspace Friedman (confidence) $p = 0.33$;\enspace Friedman (rank) $p = 0.58$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Interpretation}
+Across all three survey parts, differences between visualization variants were visible in tendency but statistically weak. This aligns with the earlier limitations: the Part 2 task may have been too similar across pages, and mobile usage likely reduced reading quality. Still, two practical patterns appear consistently: (1) polygon-based variants were not worse than baseline for lay users and were often ranked slightly better; (2) adding a map background to the basic likelihood view did not produce a clear benefit.
+
+
 
 \section{Conclusion}
 \label{sec:conclusion}
-\textit{[Note to Author: Summarize the findings based on your survey results. Conclude on which visualization approach best answers the problem statement for the general public.]}
+This project investigated how flood risk can be visualized for non-expert audiences by comparing basic raster views against polygon-based and binned alternatives. Based on the completed survey sample ($n=30$), all tested visualizations achieved similar task performance, and the differences between methods were not statistically significant.
+
+Nevertheless, the overall pattern suggests that \emph{Polygon-based} and \emph{Binned} offer the best practical balance for public communication: they were among the best-ranked in readability while maintaining similar correctness to the basic representations. In contrast, \emph{Baseline with Map} did not improve interpretation outcomes in this survey.
+
+Overall, the results indicate that simplifying flood-risk structure through polygonal abstraction (with optional binning for discrete risk classes) is a promising direction for communicating dynamic flood information to the general public. Future work should use a larger sample, device-controlled survey setup, and more discriminative task scenarios to better isolate small but meaningful visualization effects.
+
+\section{Domain-Specific Lecture}
+\label{sec:domain_specific_lecture}
+I attended the domain-specific lecture ’120.110 Data Retrieval in Earth Observation’
+and completed it on 17.06.2025.
 
 % ==============================
-% 6. SUPPLEMENTARY CONSIDERATIONS
-% ==============================
-\section{Supplementary Considerations (Optional)}
-\label{sec:supplementary}
-Beyond standard 2D map views, additional approaches were investigated to enhance future flood communication. These included creating gap-free seamless composites using a First-Valid-Pixel temporal mosaic to counteract missing satellite scanning areas. Furthermore, exploring 3D visualizations that combine flood depth with regional terrain elevation presents a promising avenue for helping decision-makers and the public immediately identify safe, elevated zones compared to at-risk lowlands.
-
-% ==============================
-% 7. BIBLIOGRAPHY
+% 6. BIBLIOGRAPHY
 % ==============================
 \begin{thebibliography}{10}
 
@@ -222,6 +386,16 @@ J.~Zhu, D.~F. Laefer, R.~P. Lejano, P.~Gmelch, E.~O'Keeffe, and K.~Chandna.
 S.~Cohen, et al. 
 \newblock Estimating floodwater depths from flood inundation maps and topography.
 \newblock {\em JAWRA Journal of the American Water Resources Association}, 54, 2017.
+
+\bibitem{Wagner2026}
+W.~Wagner, B.~Bauer-Marschallinger, F.~Roth, et al.
+\newblock The fully-automatic Sentinel-1 Global Flood Monitoring service: Scientific challenges and future directions.
+\newblock {\em Remote Sensing of Environment}, 333:115108, 2026.
+
+\bibitem{SoSciSurvey}
+SoSci Survey GmbH.
+\newblock SoSci Survey – the Solution for Professional Online Questionnaires.
+\newblock https://www.soscisurvey.de/.
 
 \end{thebibliography}
 

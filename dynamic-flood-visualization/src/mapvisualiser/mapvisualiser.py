@@ -1,6 +1,7 @@
 import dask
 import hvplot.xarray
 import numpy as np
+import pandas as pd
 import typing
 from typing import Dict, Union, Any
 from bokeh.models import ColorMapper, LinearColorMapper, LogColorMapper, CategoricalColorMapper
@@ -60,6 +61,7 @@ class MapVisualiser:
             self.bounding_box = loaded_visualiser.bounding_box
             self.refined_data = loaded_visualiser.refined_data
             self.plottable_data = loaded_visualiser.plottable_data
+            self.on_map =  loaded_visualiser.on_map if hasattr(loaded_visualiser,'on_map') else {}
             self.polygons_data = loaded_visualiser.polygons_data
             self.flood_variables = loaded_visualiser.flood_variables
         else:
@@ -79,6 +81,7 @@ class MapVisualiser:
             self.bounding_box = dcloader_instance.bounding_box
             self.refined_data = {}
             self.plottable_data = {} # here we store the reprojected and clipped dataarrays for mapping 
+            self.on_map = {}  # stores rendered map outputs by variable name
             self.polygons_data = {}
             self.flood_variables = [var for var in self.dc.data_vars.keys() if var not in req_vars]
 
@@ -476,7 +479,225 @@ class MapVisualiser:
             self.build_polygons(var_name, smooth_distance=smooth_distance)
         
         print(f"All polygons built successfully. Total: {len(self.polygons_data)} variable(s).")
-    
+
+    def build_polygons2(
+        self,
+        variable_name: str,
+        smooth_distance: float = 0.0001,
+        save_to_polygons: bool = False,
+    ) -> gpd.GeoDataFrame:
+        """
+        Builds layered severity polygons from binned raster data.
+
+        For binned data with discrete integer severity values 1..N, one polygon
+        layer is created per threshold k, where layer k covers all pixels with
+        value >= k.  Layer 1 (>= 1) is the broadest flood extent; layer N
+        (>= N) is the most severe core area.  Each layer is dissolved and
+        smoothed independently using the same projected-CRS approach as
+        :meth:`build_polygons`.
+
+        The combined GeoDataFrame carries a ``severity`` integer column and is
+        stored in ``polygons_data`` under the key
+        ``'{variable_name}_layered'`` when *save_to_polygons* is True.
+
+        Args:
+            variable_name (str): Name of a variable in ``plottable_data``
+                containing discrete integer severity values (1, 2, 3, …).
+            smooth_distance (float): Smoothing buffer in the plottable-data CRS
+                units.  Default 0.0001 works for WGS84 degrees (≈ 10 m near
+                the equator at mid-latitudes).
+            save_to_polygons (bool): If True stores the result in
+                ``self.polygons_data`` under ``'{variable_name}_layered'``.
+
+        Returns:
+            gpd.GeoDataFrame: GeoDataFrame with columns ``geometry`` and
+                ``severity``, sorted by severity ascending.
+        """
+        if variable_name not in self.plottable_data:
+            raise RuntimeError(
+                f"Variable '{variable_name}' not found in plottable_data. "
+                f"Run prepare_for_map_overlay('{variable_name}') first."
+            )
+
+        data = self.plottable_data[variable_name]
+        raw_values = data.values
+
+        # Detect discrete severity levels (finite, >= 1)
+        finite_vals = raw_values[np.isfinite(raw_values)]
+        if len(finite_vals) == 0:
+            print(f"Warning: No finite values found in '{variable_name}'.")
+            empty = gpd.GeoDataFrame({"geometry": [], "severity": []}, crs="EPSG:4326")
+            if save_to_polygons:
+                self.polygons_data[f"{variable_name}_layered"] = empty
+            return empty
+
+        severity_levels = sorted(int(v) for v in np.unique(finite_vals) if v >= 1)
+        if not severity_levels:
+            print(f"Warning: No severity levels >= 1 found in '{variable_name}'.")
+            empty = gpd.GeoDataFrame({"geometry": [], "severity": []}, crs="EPSG:4326")
+            if save_to_polygons:
+                self.polygons_data[f"{variable_name}_layered"] = empty
+            return empty
+
+        print(f"Building layered polygons for '{variable_name}'...")
+        print(f"  Severity levels detected: {severity_levels}")
+
+        # plottable data lives in WGS84 / EPSG:4326
+        source_crs = "EPSG:4326"
+        source_crs_obj = pyproj.CRS.from_string(source_crs)
+
+        # Determine projected CRS for accurate metric buffering
+        x_arr = data.x.values
+        y_arr = data.y.values
+        center_lon = float((x_arr.min() + x_arr.max()) / 2)
+        center_lat = float((y_arr.min() + y_arr.max()) / 2)
+        bounds = (float(x_arr.min()), float(y_arr.min()),
+                  float(x_arr.max()), float(y_arr.max()))
+
+        if source_crs_obj.is_geographic:
+            projected_crs = self.get_optimal_projected_crs(center_lon, center_lat, bounds)
+            lat_factor = np.cos(np.radians(center_lat))
+            smooth_distance_m = smooth_distance * 111000 * lat_factor
+            print(f"  Region: {self.get_region_name(center_lon, center_lat)}")
+            print(f"  Projected CRS: {projected_crs}  |  Buffer: {smooth_distance_m:.1f} m")
+            use_projected = True
+        else:
+            use_projected = False
+            smooth_distance_m = smooth_distance
+
+        raster_transform = data.rio.transform()
+        layer_gdfs: List[gpd.GeoDataFrame] = []
+
+        # Fix 1: precompute finite mask once — reused by every level iteration
+        finite_mask = np.isfinite(raw_values)
+
+        # Fix 4: layers are accumulated in projected CRS; a single back-projection
+        # is performed after the loop rather than one per level.
+        accumulate_in_projected = use_projected
+
+        for level in tqdm(severity_levels, desc="Building severity layers"):
+            # Fix 1+3: reuse finite_mask; keep bool_mask for shapes() directly
+            bool_mask = finite_mask & (raw_values >= level)
+
+            if not bool_mask.any():
+                print(f"  Severity >= {level}: no pixels — skipping.")
+                continue
+
+            # Fix 3: pass bool_mask as both source (uint8 cast) and mask arg —
+            # no redundant second .astype() call
+            layer_mask = bool_mask.astype(np.uint8)
+            shapes_gen = features.shapes(
+                layer_mask,
+                mask=bool_mask,
+                transform=raster_transform,
+            )
+            polys = [shape(geom) for geom, val in shapes_gen if val > 0]
+
+            if not polys:
+                print(f"  Severity >= {level}: no polygons generated — skipping.")
+                continue
+
+            layer_gdf = gpd.GeoDataFrame(geometry=polys, crs=source_crs)
+
+            # Smooth: project → repair topology → dissolve → fill holes →
+            #         simplify → buffer (lower resolution for speed)
+            # Fix 2: remove_all_holes is applied AFTER dissolve (once on the
+            #         merged geometry, not thousands of times on raw pixel polys)
+            # Fix 5: simplify before buffering reduces vertex count on the
+            #         complex dissolved boundary; resolution=8 halves the
+            #         circle segments used by buffer (default 16)
+            if use_projected:
+                layer_gdf = layer_gdf.to_crs(projected_crs)
+                layer_gdf["geometry"] = layer_gdf.buffer(0)  # repair topology
+                layer_gdf = layer_gdf.dissolve().reset_index(drop=True)
+                # Fix 2: holes only make sense on the dissolved result
+                layer_gdf["geometry"] = layer_gdf["geometry"].apply(
+                    self.remove_all_holes
+                )
+                layer_gdf["geometry"] = layer_gdf["geometry"].simplify(
+                    smooth_distance_m * 0.5, preserve_topology=True
+                )
+                layer_gdf["geometry"] = (
+                    layer_gdf.buffer(smooth_distance_m, resolution=8)
+                              .buffer(-smooth_distance_m, resolution=8)
+                )
+                # Fix 4: stay in projected CRS; back-project after the loop
+            else:
+                layer_gdf["geometry"] = layer_gdf.buffer(0)
+                layer_gdf = layer_gdf.dissolve().reset_index(drop=True)
+                layer_gdf["geometry"] = layer_gdf["geometry"].apply(
+                    self.remove_all_holes
+                )
+                layer_gdf["geometry"] = layer_gdf["geometry"].simplify(
+                    smooth_distance_m * 0.5, preserve_topology=True
+                )
+                layer_gdf["geometry"] = (
+                    layer_gdf.buffer(smooth_distance_m, resolution=8)
+                              .buffer(-smooth_distance_m, resolution=8)
+                )
+
+            layer_gdf["severity"] = level
+            layer_gdfs.append(layer_gdf[["geometry", "severity"]])
+            print(f"  Severity >= {level}: {len(layer_gdf)} polygon(s).")
+
+        if not layer_gdfs:
+            print(f"Warning: No layered polygons built for '{variable_name}'.")
+            result = gpd.GeoDataFrame(
+                {"geometry": [], "severity": []}, crs=source_crs
+            )
+        else:
+            combined = gpd.GeoDataFrame(
+                pd.concat(layer_gdfs, ignore_index=True),
+                crs=projected_crs if accumulate_in_projected else source_crs,
+            )
+            # Fix 4: single back-projection for all layers at once
+            if accumulate_in_projected:
+                combined = combined.to_crs(source_crs)
+            result = combined
+            result["severity"] = result["severity"].astype(int)
+
+        output_key = f"{variable_name}_layered"
+        if save_to_polygons:
+            self.polygons_data[output_key] = result
+
+        n_layers = result["severity"].nunique() if len(result) > 0 else 0
+        print(
+            f"✓ Layered polygons built for '{variable_name}': "
+            f"{n_layers} severity layer(s), {len(result)} polygon(s) total."
+        )
+        print(f"  Stored under key: '{output_key}'")
+        return result
+
+    def build_polygons2_all_vars(self, smooth_distance: float = 0.0001):
+        """
+        Calls :meth:`build_polygons2` for every variable in ``plottable_data``
+        and stores all results in ``polygons_data`` with the ``_layered``
+        suffix.
+
+        Args:
+            smooth_distance (float): Passed through to
+                :meth:`build_polygons2` for each variable.
+        """
+        if not self.plottable_data:
+            raise RuntimeError(
+                "No plottable data available. "
+                "Run prepare_for_map_overlay_all_vars() first."
+            )
+        print(
+            f"Building layered polygons for all "
+            f"{len(self.plottable_data)} plottable variables..."
+        )
+        for var_name in self.plottable_data.keys():
+            self.build_polygons2(
+                var_name,
+                smooth_distance=smooth_distance,
+                save_to_polygons=True,
+            )
+        print(
+            f"All layered polygons built. "
+            f"Total polygon entries: {len(self.polygons_data)}."
+        )
+
     def apply_plottable(self, expression: str, output_name: str = None, save_to_plottable: bool = False) -> xr.DataArray:
         """
         Applies a mathematical expression element-wise on plottable data variables.
@@ -630,7 +851,7 @@ class MapVisualiser:
         data_array = self.plottable_data[variable]
         data_array = data_array.fillna(-1)
         binned_da = np.digitize(data_array.values, bins=binning, right=False)
-        binned_da = binned_da - np.ones_like(binned_da)
+        # binned_da = binned_da - np.ones_like(binned_da)
         binned_da = np.where(data_array.values == -1, np.nan, binned_da)
 
         if save_to_plottable:
@@ -946,8 +1167,8 @@ class MapVisualiser:
                                 y=slice(None, None, downsample_factor))
             
             # Plot with rasterization
-            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True, 
-                          cbar_kwargs={'shrink': 0.8}, rasterized=True)
+            im = data.plot(ax=ax, cmap=cmap, add_colorbar=True if not var_name.endswith("_flood_extent") else False, 
+                          cbar_kwargs={'shrink': 0.8} if not var_name.endswith("_flood_extent") else None, rasterized=True)
             ax.set_title(var_name, fontsize=10, fontweight='bold')
             ax.set_xlabel('Longitude', fontsize=8)
             ax.set_ylabel('Latitude', fontsize=8)
@@ -1045,7 +1266,7 @@ class MapVisualiser:
             title=title,
             xlabel="Longitude",
             ylabel="Latitude",
-            colorbar=True,
+            colorbar=True if not variable_name.endswith("_flood_extent") else False, 
             xlim=(min_lon, max_lon),
             ylim=(min_lat, max_lat),
             alpha=0.9  # Higher alpha to ensure visibility
@@ -1101,6 +1322,112 @@ class MapVisualiser:
             ylim=(min_lat, max_lat)
         )
         
+        return polygon_map
+
+    def plot_polygon2(
+        self,
+        variable_name: str,
+        cmap: Union[str, list] = "Blues",
+        alpha: float = 0.6,
+        tiles: str = "OSM",
+        frame_width: int = 800,
+        frame_height: int = 600,
+        title: str = None,
+        colorbar: bool = True,
+    ) -> object:
+        """
+        Plots layered severity polygons on an interactive map.
+
+        Reads the GeoDataFrame produced by :meth:`build_polygons2` from
+        ``polygons_data['{variable_name}_layered']``.  Severity layers are
+        sorted ascending so the broadest area (lowest severity, e.g. >= 1)
+        is rendered first as the bottom layer; progressively more severe —
+        and spatially smaller — layers paint on top, creating a natural
+        graduated look where the core flood area appears most saturated.
+
+        The method also accepts the already-suffixed key directly (i.e. you
+        may pass either ``"tuw_flood_extent"`` or
+        ``"tuw_flood_extent_layered"`` as *variable_name*).
+
+        Args:
+            variable_name (str): Variable whose layered polygons to plot.
+                Looks for ``'{variable_name}_layered'`` in ``polygons_data``;
+                falls back to the exact key if the suffix is already present.
+            cmap (str | list): Colormap for severity values.  Accepts any
+                matplotlib / hvplot colormap name (e.g. ``"Blues"``,
+                ``"YlOrRd"``) or a list of hex colour strings.
+                Default ``"Blues"``.
+            alpha (float): Polygon transparency (0–1).  Default 0.6.
+            tiles (str): Tile provider for the basemap
+                (``"OSM"``, ``"EsriImagery"``, etc.).
+            frame_width (int): Width of the interactive plot in pixels.
+            frame_height (int): Height of the interactive plot in pixels.
+            title (str | None): Plot title; auto-generated from the variable
+                name and dataset date when *None*.
+            colorbar (bool): Show a colourbar for severity values.
+
+        Returns:
+            Holoviews overlay: Interactive map with the layered severity
+                polygons stacked lowest-severity-first.
+        """
+        # ── resolve key ──────────────────────────────────────────────────────
+        layered_key = f"{variable_name}_layered"
+        if layered_key in self.polygons_data:
+            gdf = self.polygons_data[layered_key]
+            resolved_key = layered_key
+        elif variable_name in self.polygons_data:
+            gdf = self.polygons_data[variable_name]
+            resolved_key = variable_name
+        else:
+            raise RuntimeError(
+                f"No layered polygons found for '{variable_name}'. "
+                f"Run build_polygons2('{variable_name}', save_to_polygons=True) first."
+            )
+
+        if len(gdf) == 0:
+            print(f"Warning: No polygons to plot for '{resolved_key}'.")
+            return None
+
+        if "severity" not in gdf.columns:
+            raise ValueError(
+                f"The GeoDataFrame under '{resolved_key}' has no 'severity' "
+                f"column.  Use build_polygons2() to generate layered polygons."
+            )
+
+        # ── title ────────────────────────────────────────────────────────────
+        if title is None:
+            try:
+                date = self.dc.time.isel(time=0).dt.strftime('%Y-%m-%d').item()
+                title = f"Flood severity layers — '{variable_name}' on {date}"
+            except Exception:
+                title = f"Flood severity layers — '{variable_name}'"
+
+        min_lon, min_lat, max_lon, max_lat = self.bounding_box
+        severity_levels = sorted(gdf["severity"].unique())
+        clim = (min(severity_levels), max(severity_levels))
+
+        # Keep draw order explicit: low severity first (background),
+        # high severity last (on top).
+        gdf_sorted = gdf.sort_values("severity").reset_index(drop=True)
+
+        polygon_map = gdf_sorted.hvplot.polygons(
+            geo=True,
+            tiles=tiles,
+            c="severity",
+            clim=clim,
+            cmap=cmap,
+            alpha=alpha,
+            line_alpha=1.0,
+            frame_width=frame_width,
+            frame_height=frame_height,
+            hover_cols=["severity"],
+            colorbar=colorbar,
+            clabel="Severity",
+            legend=False,
+            xlim=(min_lon, max_lon),
+            ylim=(min_lat, max_lat),
+            title=title,
+        )
         return polygon_map
 
     def run(self):
@@ -1216,3 +1543,181 @@ class MapVisualiser:
         print(f"✓ MapVisualiser saved successfully to {base_path}")
         print(f"  Main file: {base_path}.mapvis")
         print(f"  Total files created: {len([f for f in os.listdir(os.path.dirname(base_path) if os.path.dirname(base_path) else '.') if os.path.basename(base_path) in f])}")
+    
+    def plot_on_map2(
+        self,
+        variable_name: str,
+        cmap: list,
+        output_dir: str = "./results/maps",
+        filename: str = None,
+        alpha: float = 0.9,
+        title: str = None,
+        tiles: str = "OSM",
+        export_png: bool = True
+    ) -> dict:
+        """
+        Renders map with Bokeh from hvplot output and saves to disk.
+        Saves HTML always, PNG if webdriver/export is available.
+        Stores paths in self.on_map[variable_name].
+        """
+        if variable_name not in self.plottable_data:
+            raise RuntimeError(
+                f"Variable '{variable_name}' not found in plottable_data. "
+                f"Run prepare_for_map_overlay('{variable_name}') first."
+            )
+
+        if not hasattr(self, "on_map") or self.on_map is None:
+            self.on_map = {}
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Build base output name
+        safe_var = re.sub(r"[^a-zA-Z0-9_\-]", "_", variable_name)
+        base_name = filename if filename else f"{safe_var}_on_map"
+        html_path = os.path.join(output_dir, f"{base_name}.html")
+        png_path = os.path.join(output_dir, f"{base_name}.png")
+
+        print(f"Rendering map for '{variable_name}'...")
+
+        # Reuse existing hvplot map logic
+        hv_plot = self.plot_on_map(
+            variable_name=variable_name,
+            cmap=cmap,
+            alpha=alpha,
+            title=title,
+            tiles=tiles
+        )
+
+        # Render to Bokeh and save
+        import bokeh.io as bio
+        from bokeh.io import output_file
+
+        bokeh_doc = hv.render(hv_plot, backend="bokeh")
+
+        # Avoid Bokeh warnings by providing output_file metadata
+        output_file(html_path, title=title or f"{variable_name} map")
+        bio.save(bokeh_doc, filename=html_path, title=title or f"{variable_name} map")
+
+        saved_png = None
+        if export_png:
+            try:
+                bio.export_png(bokeh_doc, filename=png_path)
+                saved_png = png_path
+                print(f"  ✓ PNG export successful: {png_path}")
+            except Exception as e:
+                print(f"  ⚠ PNG export failed ({e}). HTML saved instead: {html_path}")
+
+        result = {
+            "variable_name": variable_name,
+            "html": html_path,
+            "png": saved_png,
+            "created_at": datetime.now().isoformat()
+        }
+
+        self.on_map[variable_name] = result
+        print(f"✓ Map rendered and saved to: {saved_png or html_path}")
+        return result
+
+    def plot_on_map2_grid(
+        self,
+        variables: List[str] = None,
+        cmap: list = COLOR_PALETTES['light_to_strong_blue'],
+        output_dir: str = "./results/maps",
+        alpha: float = 0.9,
+        title_prefix: str = None,
+        tiles: str = "OSM",
+        export_png: bool = True,
+        grid_filename: str = "map_grid.png",
+        dpi: int = 120,
+        max_vars: int = 16
+    ) -> dict:
+        """
+        Creates a grid image from per-variable map renders.
+        Reuses cached entries from self.on_map when PNG exists; otherwise generates with plot_on_map2().
+        """
+        if not self.plottable_data:
+            raise RuntimeError("No plottable data available. Run prepare_for_map_overlay_all_vars() first.")
+
+        if not hasattr(self, "on_map") or self.on_map is None:
+            self.on_map = {}
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Resolve variables
+        if variables is None:
+            selected_vars = list(self.plottable_data.keys())[:max_vars]
+        else:
+            selected_vars = [v for v in variables if v in self.plottable_data][:max_vars]
+
+        if not selected_vars:
+            raise ValueError("No valid variables provided for map grid.")
+
+        print(f"Preparing map grid for {len(selected_vars)} variable(s)...")
+
+        variable_results = {}
+        for var_name in selected_vars:
+            cached = self.on_map.get(var_name, {})
+            cached_png = cached.get("png")
+
+            if cached_png and os.path.exists(cached_png):
+                print(f"  Reusing cached PNG for '{var_name}'")
+                variable_results[var_name] = cached
+                continue
+
+            print(f"  Generating map for '{var_name}'")
+            map_title = f"{title_prefix} - {var_name}" if title_prefix else None
+            variable_results[var_name] = self.plot_on_map2(
+                variable_name=var_name,
+                cmap=cmap,
+                output_dir=output_dir,
+                filename=f"{re.sub(r'[^a-zA-Z0-9_\\-]', '_', var_name)}_on_map",
+                alpha=alpha,
+                title=map_title,
+                tiles=tiles,
+                export_png=export_png
+            )
+
+        # Build grid from PNG outputs
+        n_vars = len(selected_vars)
+        n_rows, n_cols = self.__getGridDimensions__(n_vars)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), dpi=dpi)
+        axes = np.array(axes).reshape(-1) if n_vars > 1 else np.array([axes])
+
+        for idx, var_name in enumerate(selected_vars):
+            ax = axes[idx]
+            entry = variable_results[var_name]
+            png_path = entry.get("png", None)
+
+            if png_path and os.path.exists(png_path):
+                img = plt.imread(png_path)
+                ax.imshow(img)
+                ax.set_title(var_name, fontsize=10, fontweight='bold')
+                ax.axis('off')
+            else:
+                ax.text(
+                    0.5, 0.5,
+                    "PNG unavailable\n(HTML only)",
+                    ha='center', va='center', fontsize=9
+                )
+                ax.set_title(var_name, fontsize=10, fontweight='bold')
+                ax.axis('off')
+
+        for idx in range(n_vars, len(axes)):
+            axes[idx].axis('off')
+
+        plt.tight_layout()
+        grid_path = os.path.join(output_dir, grid_filename)
+        fig.savefig(grid_path, dpi=dpi, bbox_inches='tight')
+        plt.close(fig)
+
+        result = {
+            "grid_png": grid_path,
+            "variables": variable_results,
+            "created_at": datetime.now().isoformat()
+        }
+
+        # Optional cache for latest grid artifact
+        self.on_map["_grid_last"] = result
+
+        print(f"✓ Map grid saved: {grid_path}")
+        return result
